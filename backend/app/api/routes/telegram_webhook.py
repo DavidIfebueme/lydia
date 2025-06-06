@@ -2,7 +2,9 @@ from fastapi import APIRouter, Request, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_db
 from app.services.telegram_service import telegram_service
+from app.services.payman_service import payman_service
 from app.models.user import User
+from app.config import settings
 from sqlalchemy import select
 import json
 
@@ -33,6 +35,8 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             await handle_help_command(chat_id)
         elif text.startswith("/problem"):
             await handle_problem_command(chat_id, user)
+        elif text.startswith("/balance"):
+            await handle_balance_command(chat_id, user)
         else:
             await handle_guess_attempt(chat_id, user, text, db)
         
@@ -45,28 +49,6 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
 async def handle_start_command(chat_id: int, user: User, db: AsyncSession, username: str, first_name: str, user_id: int):
     """Handle /start command"""
     if not user:
-        # New user - need to register via Payman OAuth
-        welcome_message = f"""
-🎯 <b>Welcome to Lydia!</b> 
-
-Hello {first_name}! I'm your AI riddle master. 
-
-To play, you need to connect your Payman wallet first. This allows you to:
-• Pay small fees for each guess attempt
-• Receive prize winnings instantly
-• Participate in the prize pool
-
-<b>How to get started:</b>
-1. Click the link below to connect your Payman wallet
-2. Complete the OAuth flow
-3. Return here to start solving problems!
-
-Connect your wallet: [Payman OAuth Link - Coming Soon]
-
-Type /help for more information.
-        """
-        
-        # Create user record (without Payman details yet)
         new_user = User(
             telegram_id=str(user_id),
             payman_id=None,
@@ -74,28 +56,64 @@ Type /help for more information.
         )
         db.add(new_user)
         await db.commit()
+        user = new_user
+    
+    if not user.payman_access_token:
+        connect_url = f"{settings.PAYMAN_REDIRECT_URI.replace('/callback', '/connect')}?user_id={user_id}"
         
+        welcome_message = f"""
+🎯 <b>Welcome to Lydia!</b> 
+
+Hello {first_name}! I'm your AI puzzle master.
+
+To play, you need to connect your Payman wallet:
+
+🔗 <b><a href="{connect_url}">Connect Your Payman Wallet</a></b>
+
+After connecting, you can:
+• Pay small fees for each guess attempt
+• Receive prize winnings instantly
+• Participate in the prize pool
+
+Click the link above and return here when done!
+        """
     else:
-        if user.payman_access_token:
-            welcome_message = f"""
+        welcome_message = f"""
 🎯 <b>Welcome back, {first_name}!</b>
 
-You're all set up and ready to play!
+Your wallet is connected and ready!
 
 Type /problem to see the current challenge.
-Type /help for commands.
-            """
-        else:
-            welcome_message = f"""
-🎯 <b>Welcome back, {first_name}!</b>
-
-You need to complete your Payman wallet connection:
-[Payman OAuth Link - Coming Soon]
-
-Once connected, you can start playing!
-            """
+Type /balance to check your wallet.
+        """
     
     await telegram_service.send_message(chat_id, welcome_message)
+
+
+async def handle_balance_command(chat_id: int, user: User):
+    """Handle /balance command"""
+    if not user or not user.payman_access_token:
+        message = """
+❌ <b>Wallet Not Connected</b>
+
+Connect your wallet first with /start
+        """
+    else:
+        try:
+            balance_data = await payman_service.get_balance(user.payman_access_token)
+            message = f"""
+💰 <b>Your Wallet Balance</b>
+
+{balance_data.get('balance', 'Unable to fetch balance')}
+            """
+        except Exception as e:
+            message = f"""
+❌ <b>Error Checking Balance</b>
+
+Unable to fetch balance. Please try again later.
+            """
+    
+    await telegram_service.send_message(chat_id, message)
 
 async def handle_help_command(chat_id: int):
     """Handle /help command"""
