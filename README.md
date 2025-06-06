@@ -18,17 +18,13 @@ Each guess contributes to the prize pool. First correct guess wins the pot.
 ---
 
 ## 🧱 Monorepo Structure
-
+```
 payman-riddle-game/
 ├── backend/ # FastAPI backend API
 ├── frontend/ # Next.js frontend UI
 ├── .env # Shared environment variables
-└── docker-compose.yml (optional)
 
-yaml
-Copy
-Edit
-
+```
 ---
 
 ## ⚙️ Tech Stack
@@ -47,7 +43,6 @@ Edit
 **Other**
 - Monorepo layout
 - `.env` support
-- Docker-friendly setup
 
 ---
 
