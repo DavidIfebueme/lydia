@@ -1,9 +1,10 @@
 from fastapi import FastAPI
-from app.api.routes import telegram_webhook
+from app.api.routes import telegram_webhook, payman_oauth
 
 app = FastAPI(title="Lydia - AI Puzzle Game")
 
 app.include_router(telegram_webhook.router, prefix="/webhook", tags=["webhook"])
+app.include_router(payman_oauth.router, prefix="/oauth", tags=["oauth"])
 
 @app.get("/health")
 async def health():

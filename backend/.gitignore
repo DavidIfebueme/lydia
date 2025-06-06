@@ -1,26 +1,45 @@
 # Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.sqlite3
-
-# Virtual environments
-.venv/
+*.py[cod]
+*$py.class
+*.so
+.Python
 env/
 venv/
+ENV/
+.venv/
+
+# FastAPI/Backend
+backend/.env
+backend/alembic.ini
+
+# Node.js/Payman Service
+payman-service/node_modules/
+payman-service/.env
+payman-service/npm-debug.log*
+payman-service/package-lock.json
+
+# Database
+*.db
+*.sqlite
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
 
 # Environment variables
 .env
-
-# Alembic
-alembic/versions/*.pyc
-
-# VSCode
-.vscode/
-
-# OS files
-.DS_Store
-Thumbs.db
+.env.local
+.env.production
 
 plan.md
