@@ -30,7 +30,7 @@ payman-riddle-game/
 ## ⚙️ Tech Stack
 
 **Backend**
-- Python 3.10+
+- Python 3.12
 - FastAPI
 - PostgreSQL (optional for persistence)
 - Payman SDK (via natural-language `ask()` calls)
