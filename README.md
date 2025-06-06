@@ -1,4 +1,4 @@
-# 💰 Payman Riddle Game
+# 💰 Lydia
 
 A global, real-money puzzle game powered by [Payman](https://paymanai.com).  
 Users pay a small fee to guess the answer to a riddle or problem.  
