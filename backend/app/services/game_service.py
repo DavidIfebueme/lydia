@@ -78,8 +78,9 @@ class GameService:
         rollover_amount = total_pool * self.ROLLOVER_RATIO
         return winner_amount, rollover_amount
     
+
     async def process_attempt(self, user: User, guess: str, db: AsyncSession) -> dict:
-        """Process a user's guess attempt"""
+        """Process a user's guess attempt with token expiration handling"""
         problem = await self.get_current_problem(db)
         if not problem:
             return {"error": "No active problem"}
@@ -93,12 +94,21 @@ class GameService:
             user_id=user.payman_id
         )
         
+        if charge_result.get("error") == "TOKEN_EXPIRED":
+            user.payman_access_token = None
+            user.payman_id = None
+            await db.commit()
+            
+            return {
+                "error": "🔄 Your wallet connection has expired. Please use /start to reconnect your Payman wallet.",
+                "token_expired": True
+            }
+        
         if not charge_result.get("success"):
-            return {"error": "Payment failed", "details": charge_result}
+            return {"error": "Payment failed", "details": charge_result.get("error", "Unknown error")}
         
         is_correct = self.check_answer(guess, problem.answer_hash)
         
-
         attempt = Attempt(
             user_id=user.id,
             problem_id=problem.id,

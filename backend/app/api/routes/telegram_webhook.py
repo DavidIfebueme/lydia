@@ -36,9 +36,9 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         elif text.startswith("/help"):
             await handle_help_command(chat_id)
         elif text.startswith("/problem"):
-            await handle_problem_command(chat_id, user)
+            await handle_problem_command(chat_id, user, db)
         elif text.startswith("/balance"):
-            await handle_balance_command(chat_id, user)
+            await handle_balance_command(chat_id, user, db)
         else:
             await handle_guess_attempt(chat_id, user, text, db)
         
@@ -92,8 +92,8 @@ Type /balance to check your wallet.
     await telegram_service.send_message(chat_id, welcome_message)
 
 
-async def handle_balance_command(chat_id: int, user: User):
-    """Handle /balance command"""
+async def handle_balance_command(chat_id: int, user: User, db: AsyncSession = None):
+    """Handle /balance command with token expiration handling"""
     if not user or not user.payman_access_token:
         message = """
 ❌ <b>Wallet Not Connected</b>
@@ -103,19 +103,103 @@ Connect your wallet first with /start
     else:
         try:
             balance_data = await payman_service.get_balance(user.payman_access_token)
-            message = f"""
+            #print(f"🔍 Balance data received: {balance_data}")
+            
+            if balance_data.get('error') == 'TOKEN_EXPIRED':
+                print(f"🔄 Token expired for user {user.telegram_id}, clearing stored token")
+                
+                if db:
+                    user.payman_access_token = None
+                    user.payman_id = None
+                    await db.commit()
+                
+                connect_url = f"{settings.PAYMAN_REDIRECT_URI.replace('/callback', '/connect')}?user_id={user.telegram_id}"
+                
+                message = f"""
+🔄 <b>Token Expired</b>
+
+Your Payman wallet connection has expired. Please reconnect:
+
+🔗 <b><a href="{connect_url}">Reconnect Your Payman Wallet</a></b>
+
+This happens periodically for security. After reconnecting, your balance will be available again.
+                """
+            
+            elif balance_data.get('success'):
+                wallet_response = balance_data.get('balance', {})
+                
+                # Extract wallet information from the AI response
+                if isinstance(wallet_response, dict) and wallet_response.get('status') == 'COMPLETED' and 'artifacts' in wallet_response:
+                    artifacts = wallet_response.get('artifacts', [])
+                    
+                    # Find the response artifact
+                    wallet_info = None
+                    for artifact in artifacts:
+                        if artifact.get('name') == 'response':
+                            wallet_info = artifact.get('content', '')
+                            break
+                    
+                    if wallet_info:
+                        clean_wallet_info = wallet_info.replace('|', '').replace('-', '').strip()
+                        
+                        message = f"""
 💰 <b>Your Wallet Balance</b>
 
-{balance_data.get('balance', 'Unable to fetch balance')}
-            """
+{clean_wallet_info}
+
+<b>Status:</b> ✅ Connected
+<b>Last Updated:</b> {wallet_response.get('timestamp', 'Unknown')[:19]}
+                        """
+                    else:
+                        message = """
+💰 <b>Your Wallet Balance</b>
+
+✅ Wallet connected but no balance details available.
+
+<b>Status:</b> Connected
+                        """
+                elif isinstance(wallet_response, dict):
+                    balance_text = str(wallet_response).replace('{', '').replace('}', '').replace("'", "")
+                    message = f"""
+💰 <b>Your Wallet Balance</b>
+
+{balance_text}
+
+<b>Status:</b> ✅ Connected
+                    """
+                else:
+                    message = f"""
+💰 <b>Your Wallet Balance</b>
+
+{wallet_response}
+
+<b>Status:</b> ✅ Connected
+                    """
+            else:
+                error_msg = balance_data.get('error', 'Unknown error')
+                details = balance_data.get('details', '')
+                
+                message = f"""
+❌ <b>Balance Check Failed</b>
+
+Error: {error_msg}
+{f'Details: {details}' if details else ''}
+
+Please try again later.
+                """
+                
         except Exception as e:
+            print(f"🚨 Balance check exception: {str(e)}")
             message = f"""
 ❌ <b>Error Checking Balance</b>
 
-Unable to fetch balance. Please try again later.
+Exception: {str(e)}
+
+Your wallet connection may have expired. Try /start to reconnect.
             """
     
     await telegram_service.send_message(chat_id, message)
+
 
 async def handle_help_command(chat_id: int):
     """Handle /help command"""

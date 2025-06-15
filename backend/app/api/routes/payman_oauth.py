@@ -12,7 +12,7 @@ router = APIRouter()
 
 @router.get("/connect")
 async def oauth_connect_page(user_id: str):
-    """Show Payman Connect Button page"""
+    """Show Payman Connect Button page with proper message handling"""
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -20,10 +20,33 @@ async def oauth_connect_page(user_id: str):
         <title>Connect Your Payman Wallet</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-            body {{ font-family: Arial, sans-serif; padding: 20px; text-align: center; }}
-            .container {{ max-width: 400px; margin: 0 auto; }}
-            h1 {{ color: #333; }}
-            p {{ color: #666; }}
+            body {{ 
+                font-family: Arial, sans-serif; 
+                padding: 20px; 
+                text-align: center; 
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }}
+            .container {{ 
+                max-width: 400px; 
+                background: rgba(255,255,255,0.1);
+                padding: 30px;
+                border-radius: 15px;
+                backdrop-filter: blur(10px);
+            }}
+            h1 {{ color: #fff; margin-bottom: 20px; }}
+            p {{ color: #f0f0f0; margin: 15px 0; }}
+            .debug {{ font-size: 12px; margin-top: 20px; opacity: 0.7; }}
+            .status {{ 
+                margin-top: 20px; 
+                padding: 10px; 
+                border-radius: 5px; 
+                background: rgba(255,255,255,0.1); 
+            }}
         </style>
     </head>
     <body>
@@ -31,9 +54,21 @@ async def oauth_connect_page(user_id: str):
             <h1>🎯 Connect Your Wallet</h1>
             <p>Click the button below to connect your Payman wallet to Lydia:</p>
             <div id="payman-connect"></div>
-            <p><small>After connecting, return to Telegram to start playing!</small></p>
+            <p><small>After connecting, you'll be redirected automatically!</small></p>
+            
+            <div id="status" class="status" style="display: none;">
+                <p id="status-text">Processing...</p>
+            </div>
+            
+            <div class="debug">
+                <p>Debug Info:</p>
+                <p>User ID: {user_id}</p>
+                <p>Client ID: {settings.PAYMAN_CLIENT_ID}</p>
+                <p>Redirect: {settings.PAYMAN_REDIRECT_URI}</p>
+            </div>
         </div>
         
+        <!-- Payman Connect Button Script -->
         <script
             src="https://app.paymanai.com/js/pm.js"
             data-client-id="{settings.PAYMAN_CLIENT_ID}"
@@ -41,85 +76,168 @@ async def oauth_connect_page(user_id: str):
             data-redirect-uri="{settings.PAYMAN_REDIRECT_URI}"
             data-target="#payman-connect"
             data-dark-mode="false"
-            data-styles='{{"borderRadius": "8px", "fontSize": "16px"}}'></script>
+            data-styles='{{"borderRadius": "8px", "fontSize": "16px", "padding": "12px 24px"}}'></script>
             
         <script>
-            // Store user_id for callback
+            console.log('OAuth page loaded for user:', '{user_id}');
             localStorage.setItem('telegram_user_id', '{user_id}');
+            
+            // Status update function
+            function updateStatus(message, isError = false) {{
+                const statusDiv = document.getElementById('status');
+                const statusText = document.getElementById('status-text');
+                statusDiv.style.display = 'block';
+                statusDiv.style.background = isError ? 'rgba(255,0,0,0.2)' : 'rgba(0,255,0,0.2)';
+                statusText.textContent = message;
+            }}
+            
+            // Handle OAuth redirect messages (OFFICIAL PAYMAN WAY)
+            window.addEventListener("message", function (event) {{
+                console.log('Received message event:', event.data);
+                
+                if (event.data.type === "payman-oauth-redirect") {{
+                    console.log('OAuth redirect detected!');
+                    updateStatus('OAuth completed! Processing...');
+                    
+                    const url = new URL(event.data.redirectUri);
+                    const code = url.searchParams.get("code");
+                    const error = url.searchParams.get("error");
+                    
+                    if (error) {{
+                        console.error('OAuth error:', error);
+                        updateStatus('OAuth failed: ' + error, true);
+                        return;
+                    }}
+                    
+                    if (code) {{
+                        console.log('Authorization code received:', code.substring(0, 20) + '...');
+                        exchangeCodeForToken(code);
+                    }} else {{
+                        console.error('No authorization code received');
+                        updateStatus('No authorization code received', true);
+                    }}
+                }}
+            }});
+            
+            // Exchange code for token (FOLLOWING OFFICIAL DOCS)
+            async function exchangeCodeForToken(code) {{
+                try {{
+                    updateStatus('Exchanging code for token...');
+                    console.log('Exchanging code for token...');
+                    
+                    const response = await fetch('/oauth/exchange', {{
+                        method: "POST",
+                        headers: {{ "Content-Type": "application/json" }},
+                        body: JSON.stringify({{ code }})
+                    }});
+                    
+                    const result = await response.json();
+                    console.log('Token exchange result:', result);
+                    
+                    if (result.success) {{
+                        updateStatus('Token received! Updating user...');
+                        
+                        // Update user in database
+                        const telegramUserId = localStorage.getItem('telegram_user_id');
+                        if (telegramUserId) {{
+                            const notifyResponse = await fetch('/oauth/notify-success', {{
+                                method: 'POST',
+                                headers: {{ 'Content-Type': 'application/json' }},
+                                body: JSON.stringify({{
+                                    code: code,
+                                    telegram_user_id: telegramUserId,
+                                    access_token: result.accessToken,
+                                    payman_user_id: result.userId
+                                }})
+                            }});
+                            
+                            const notifyResult = await notifyResponse.json();
+                            console.log('Notification result:', notifyResult);
+                            
+                            if (notifyResult.success) {{
+                                updateStatus('✅ Wallet connected successfully!');
+                                setTimeout(() => {{
+                                    window.close();
+                                }}, 2000);
+                            }} else {{
+                                updateStatus('Failed to update user: ' + notifyResult.error, true);
+                            }}
+                        }} else {{
+                            updateStatus('No telegram user ID found', true);
+                        }}
+                    }} else {{
+                        updateStatus('Token exchange failed: ' + result.error, true);
+                    }}
+                }} catch (error) {{
+                    console.error('Exchange failed:', error);
+                    updateStatus('Exchange failed: ' + error.message, true);
+                }}
+            }}
         </script>
     </body>
     </html>
     """
     return HTMLResponse(content=html_content)
 
-@router.get("/callback")
-async def oauth_callback(request: Request, db: AsyncSession = Depends(get_db)):
-    """Handle Payman OAuth callback"""
+
+@router.post("/exchange")
+async def oauth_token_exchange(request: Request):
+    """Exchange OAuth code for access token (following official docs)"""
     try:
-        code = request.query_params.get("code")
-        error = request.query_params.get("error")
-        
-        if error:
-            return HTMLResponse(f"""
-                <h1>❌ Connection Failed</h1>
-                <p>Error: {error}</p>
-                <p>Please return to Telegram and try again.</p>
-            """)
+        data = await request.json()
+        code = data.get("code")
         
         if not code:
-            raise HTTPException(status_code=400, detail="No authorization code received")
-        
+            return {"success": False, "error": "No authorization code provided"}
+
         token_data = await payman_service.exchange_code_for_token(code)
         
         if "error" in token_data:
-            return HTMLResponse(f"""
-                <h1>❌ Token Exchange Failed</h1>
-                <p>Error: {token_data['error']}</p>
-                <p>Please return to Telegram and try again.</p>
-            """)
+            return {"success": False, "error": token_data["error"]}
         
-        return HTMLResponse(f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Wallet Connected!</title>
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <style>
-                    body {{ font-family: Arial, sans-serif; padding: 20px; text-align: center; }}
-                    .success {{ color: #28a745; }}
-                </style>
-            </head>
-            <body>
-                <h1 class="success">🎉 Wallet Connected!</h1>
-                <p>Your Payman wallet has been successfully connected to Lydia.</p>
-                <p><strong>You can now close this window and return to Telegram to start playing!</strong></p>
-                
-                <script>
-                    // Try to get telegram user ID and notify the backend
-                    const telegramUserId = localStorage.getItem('telegram_user_id');
-                    if (telegramUserId) {{
-                        fetch('/oauth/notify-success', {{
-                            method: 'POST',
-                            headers: {{ 'Content-Type': 'application/json' }},
-                            body: JSON.stringify({{
-                                code: '{code}',
-                                telegram_user_id: telegramUserId,
-                                access_token: '{token_data.get("accessToken", "")}',
-                                user_id: '{token_data.get("userId", "")}'
-                            }})
-                        }});
-                    }}
-                </script>
-            </body>
-            </html>
-        """)
+        return {
+            "success": True,
+            "accessToken": token_data.get("accessToken"),
+            "expiresIn": token_data.get("expiresIn"),
+            "userId": token_data.get("userId")
+        }
         
     except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/callback")
+async def oauth_callback(request: Request):
+    """Simple callback endpoint (fallback)"""
+    code = request.query_params.get("code")
+    error = request.query_params.get("error")
+    
+    if error:
         return HTMLResponse(f"""
-            <h1>❌ Connection Failed</h1>
-            <p>Error: {str(e)}</p>
-            <p>Please return to Telegram and try again.</p>
+            <h1>❌ OAuth Error</h1>
+            <p>Error: {error}</p>
+            <p>Please try again.</p>
         """)
+    
+    if code:
+        return HTMLResponse(f"""
+            <h1>✅ Authorization Code Received</h1>
+            <p>Code: {code[:20]}...</p>
+            <p>This should be handled by the message listener.</p>
+            <script>
+                // Send message to parent window
+                if (window.opener) {{
+                    window.opener.postMessage({{
+                        type: 'payman-oauth-redirect',
+                        redirectUri: window.location.href
+                    }}, '*');
+                    window.close();
+                }}
+            </script>
+        """)
+    
+    return HTMLResponse("<h1>❌ No authorization code received</h1>")
+
 
 @router.post("/notify-success")
 async def notify_success(request: Request, db: AsyncSession = Depends(get_db)):
