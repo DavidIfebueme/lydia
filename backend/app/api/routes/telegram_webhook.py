@@ -3,9 +3,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_db
 from app.services.telegram_service import telegram_service
 from app.services.payman_service import payman_service
+from app.services.game_service import game_service
 from app.models.user import User
 from app.config import settings
 from sqlalchemy import select
+from datetime import datetime, timedelta
 import json
 
 router = APIRouter()
@@ -140,8 +142,8 @@ async def handle_help_command(chat_id: int):
     
     await telegram_service.send_message(chat_id, help_message)
 
-async def handle_problem_command(chat_id: int, user: User):
-    """Handle /problem command"""
+async def handle_problem_command(chat_id: int, user: User, db: AsyncSession):
+    """Handle /problem command with escalation info"""
     if not user or not user.payman_access_token:
         message = """
 ❌ <b>Wallet Not Connected</b>
@@ -150,22 +152,53 @@ You need to connect your Payman wallet first!
 Type /start to get the connection link.
         """
     else:
-        # TODO: Get current active problem from database
-        message = """
+        problem = await game_service.get_current_problem(db)
+        if not problem:
+            message = """
+❌ <b>No Active Problem</b>
+
+There's currently no active problem. A new one will be available soon!
+            """
+        else:
+            current_pool = await game_service.get_current_prize_pool(problem.id, db)
+            current_cost = game_service.calculate_attempt_cost(problem.created_at)
+            hours_elapsed = (datetime.utcnow() - problem.created_at).total_seconds() / 3600
+            
+            next_escalation_hours = ((int(hours_elapsed / 6) + 1) * 6) - hours_elapsed
+            next_cost = game_service.calculate_attempt_cost(
+                problem.created_at - timedelta(hours=next_escalation_hours)
+            )
+            
+            escalation_info = ""
+            if hours_elapsed > 0:
+                escalation_info = f"""
+⏰ <b>Time Dynamics:</b>
+• Problem active for: {hours_elapsed:.1f} hours
+• Next cost increase in: {next_escalation_hours:.1f} hours
+• Next attempt cost: ${next_cost:.2f}
+                """
+            
+            message = f"""
 🧩 <b>Current Challenge</b>
 
-Problem: What gets wetter the more it dries?
+<b>Problem:</b> {problem.question}
 
-💰 Current Prize Pool: $127.50
-💸 Cost per Guess: $2.50
+💰 <b>Current Prize Pool:</b> ${current_pool:.2f}
+💸 <b>Attempt Cost:</b> ${current_cost:.2f}
+{escalation_info}
+
+<b>📊 Game Economics:</b>
+• Winner receives: 80% (${current_pool * 0.8:.2f})
+• Next game starts with: 20% (${current_pool * 0.2:.2f})
 
 Send me your answer to make a guess!
-        """
+            """
     
     await telegram_service.send_message(chat_id, message)
 
+
 async def handle_guess_attempt(chat_id: int, user: User, guess: str, db: AsyncSession):
-    """Handle a guess attempt"""
+    """Handle a guess attempt with mathematical cost escalation"""
     if not user or not user.payman_access_token:
         message = """
 ❌ <b>Wallet Not Connected</b>
@@ -173,15 +206,56 @@ async def handle_guess_attempt(chat_id: int, user: User, guess: str, db: AsyncSe
 You need to connect your Payman wallet to make guesses!
 Type /start to get started.
         """
-    else:
-        # TODO: Process the guess attempt
+        await telegram_service.send_message(chat_id, message)
+        return
+    
+    result = await game_service.process_attempt(user, guess, db)
+    
+    if "error" in result:
         message = f"""
-🎯 <b>Guess Received!</b>
+❌ <b>Attempt Failed</b>
 
-Your guess: "{guess}"
+{result['error']}
 
-Processing payment and checking answer...
-[Payment & Game Logic - Coming Soon]
+Try again or check your wallet balance!
+        """
+    elif result.get("is_winner"):
+        message = f"""
+🎉🏆 <b>WINNER! CONGRATULATIONS!</b> 🏆🎉
+
+Your guess: "<b>{guess}</b>" is CORRECT!
+
+💰 Attempt Cost: ${result['cost']:.2f}
+🏆 Total Prize Pool: ${result['total_pool']:.2f}
+💸 Your Payout: ${result['winner_payout']:.2f}
+🔄 Next Game Pool: ${result['rollover_amount']:.2f}
+
+<b>🎯 Payment processing...</b>
+You'll receive your winnings shortly!
+
+A new challenge is now active! Type /problem to see it.
+        """
+    elif result["is_correct"]:
+        message = f"""
+🎉 <b>CORRECT ANSWER!</b> 🎉
+
+Your guess: "<b>{guess}</b>" is right!
+But processing winner status...
+        """
+    else:
+        hours_elapsed = result.get("hours_elapsed", 0)
+        escalation_info = ""
+        if hours_elapsed > 6:
+            escalation_info = f"\n⏰ Cost escalated after {hours_elapsed:.1f} hours"
+        
+        message = f"""
+❌ <b>Incorrect</b>
+
+Your guess: "<b>{guess}</b>"
+💰 Charged: ${result['cost']:.2f}{escalation_info}
+💰 Current Prize Pool: ${result['current_pool']:.2f}
+
+The challenge continues! Try again or wait for cost to escalate.
         """
     
     await telegram_service.send_message(chat_id, message)
