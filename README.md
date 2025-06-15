@@ -32,7 +32,7 @@ payman-riddle-game/
 **Backend**
 - Python 3.12
 - FastAPI
-- PostgreSQL (optional for persistence)
+- PostgreSQL DB
 - Payman SDK (via natural-language `ask()` calls)
 
 **Frontend**
