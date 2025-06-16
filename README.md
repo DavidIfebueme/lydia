@@ -49,3 +49,98 @@ Lydia is a Telegram bot that creates an engaging problem solving and guessing ga
 ## 📊 Cost Structure
 
 The attempt cost increases over time using a mathematical formula based on the Golden Ratio (φ) and Euler's number (e):
+
+cost = base_cost * φ^(hours/6) * (1 + e^(hours/72)/10)
+
+
+This creates an elegant progression:
+- Hour 0-6: $0.50 - $0.81
+- Hour 6-12: $0.81 - $1.31
+- Hour 12-18: $1.31 - $2.12
+- Hour 18-24: $2.12 - $3.43
+- Hour 24+: Exponential growth
+
+## 🛠️ Development Setup
+
+### Prerequisites
+
+- Python 3.9+
+- Node.js 14+
+- PostgreSQL 12+
+- Poetry (Python package manager)
+- Telegram Bot Token
+- Payman Developer Account
+
+### Local Development
+
+1. **Clone the repository**:
+```bash
+git clone https://github.com/yourusername/lydia.git
+cd lydia
+```
+2. **Set up backend**
+```bash
+cd backend
+poetry install
+touch .env  # Edit with your credentials
+poetry run alembic upgrade head
+poetry run python -m app.scripts.seed_problem
+```
+3. **Start Payman Service**
+```bash
+cd ../payman-service
+npm install
+cp .env.example .env  # Edit with your credentials
+node index.mjs
+```
+4. **Run the fastapi backend**
+```bash
+cd ../backend
+poetry run uvicorn app.main:app --reload
+```
+
+
+## 3. Testing Instructions for Your Team/Users
+
+Here's a detailed testing guide you can share with your users or team members:
+
+### How to Test Lydia Bot
+
+1. **Initial Setup**
+   - Open Telegram and search for `@Lydia_Payman_Bot`
+   - Start a chat with the bot by clicking the "Start" button
+   - Send the `/start` command
+
+2. **Connecting Your Wallet**
+   - Click the "Connect Your Payman Wallet" button that appears
+   - You'll be redirected to the Payman authorization page
+   - Grant access to your Payman wallet
+   - After successful connection, you'll see a confirmation message
+
+3. **Viewing the Current Problem**
+   - Send `/problem` to see the active challenge
+   - You'll see:
+     - The problem description
+     - Current prize pool amount
+     - Current attempt cost
+     - Time elapsed since problem started
+     - Total attempts made
+
+4. **Making an Attempt**
+   - Simply send your answer as a text message
+   - For the current problem ("I'm thinking of a random number between 1 and 200"), try any number
+   - Check your wallet - you'll be charged the current attempt cost
+   - The prize pool will increase by the amount you paid
+
+5. **Checking Your Balance**
+   - Send `/balance` to view your current Payman wallet balance
+   - This helps verify that transactions are working correctly
+
+6. **Winning the Prize** (for testing purposes)
+   - The current answer is "173" (as set in your seed script)
+   - When you send "173" as your answer, you'll:
+     - Win 80% of the current prize pool
+     - See funds transferred to your wallet immediately
+     - Notice a new problem is generated automatically with 20% of the previous pool
+
+This comprehensive testing approach ensures all aspects of your application function correctly, from wallet connection to prize distribution.
