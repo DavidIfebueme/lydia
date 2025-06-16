@@ -17,11 +17,11 @@ async def create_initial_problem():
             return
         
         # Create first problem
-        answer = "towel"
+        answer = "173"
         answer_hash = hashlib.sha256(answer.lower().strip().encode()).hexdigest()
         
         problem = Problem(
-            question="What gets wetter the more it dries?",
+            question="I'm thinking of a random number betweeen 1 and 200. what is it?",
             answer_hash=answer_hash,
             is_active=True,
             created_at=datetime.utcnow()

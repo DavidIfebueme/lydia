@@ -40,7 +40,7 @@ class PaymanService:
                         "accessToken": access_token,
                         "amount": amount,
                         "description": description,
-                        "userId": user_id
+                        "userId": user_id,
                     }
                 )
                 
@@ -54,8 +54,9 @@ class PaymanService:
         except Exception as e:
             return {"error": f"Network error during charge: {str(e)}"}
     
-    async def payout_winner(self, access_token: str, amount: float, user_id: str, description: str) -> Dict[str, Any]:
+    async def payout_winner(self, access_token: str, amount: float, payee_id: str, description: str) -> Dict[str, Any]:
         """Pay out winnings to user with token validation"""
+
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
@@ -63,7 +64,7 @@ class PaymanService:
                     json={
                         "accessToken": access_token,
                         "amount": amount,
-                        "userId": user_id,
+                        "payeeId": payee_id,
                         "description": description
                     }
                 )

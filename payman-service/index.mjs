@@ -193,8 +193,8 @@ app.post("/charge", async (req, res) => {
 
 app.post("/payout", async (req, res) => {
   try {
-    const { accessToken, amount, userId, description } = req.body;
-    console.log(`🔄 Attempting payout of $${amount} to user ${userId}`);
+    const { accessToken, amount, payeeId, description } = req.body;
+    console.log(`🔄 Attempting payout of $${amount} to user ${payeeId}`);
     
     const APP_WALLET_ID = process.env.PAYMAN_APP_WALLET_ID;
     
@@ -203,7 +203,7 @@ app.post("/payout", async (req, res) => {
       expiresIn: 3600
     });
     
-    const result = await client.ask(`send $${amount} from wallet ${APP_WALLET_ID} to user ${userId} for ${description}`);
+    const result = await client.ask(`send $${amount} from wallet ${APP_WALLET_ID} to payee ${payeeId} for ${description}`);
     console.log("✅ Payout successful");
     res.json({ success: true, result });
     

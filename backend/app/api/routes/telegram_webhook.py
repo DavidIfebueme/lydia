@@ -266,9 +266,22 @@ There's no active problem at the moment. One will be created when the first play
         select(func.count(Attempt.id)).where(Attempt.problem_id == problem.id)
     )
     total_attempts = attempts_result.scalar_one()
+
+    # SIMPLIFY: Force both to be naive by removing timezone info completely
+    now = datetime.utcnow()
     
-    hours_elapsed = (datetime.utcnow() - problem.created_at).total_seconds() / 3600
-    current_cost = game_service.calculate_attempt_cost(problem.created_at)
+    # If problem.created_at has timezone info, remove it
+    if hasattr(problem.created_at, 'tzinfo') and problem.created_at.tzinfo is not None:
+        # Convert to timestamp and back to remove timezone
+        timestamp = problem.created_at.timestamp()
+        problem_time = datetime.utcfromtimestamp(timestamp)
+    else:
+        # Already timezone-naive
+        problem_time = problem.created_at
+    
+    # Now both are timezone-naive
+    hours_elapsed = (now - problem_time).total_seconds() / 3600
+    current_cost = game_service.calculate_attempt_cost(problem_time)  # Pass timezone-naive time
     
     message = f"""
 🧩 <b>Current Problem</b> #{problem.id}

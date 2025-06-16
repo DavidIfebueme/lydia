@@ -1,8 +1,10 @@
 import hashlib
 import math
 from datetime import datetime
+from decimal import Decimal
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
+from app.config import settings
 from app.models.problem import Problem
 from app.models.attempt import Attempt
 from app.models.user import User
@@ -39,7 +41,15 @@ class GameService:
         - Hour 18-24: $2.12 - $3.43 (high stakes)
         - Hour 24+: Exponential growth (creates urgency)
         """
-        hours_elapsed = (datetime.utcnow() - problem_created_at).total_seconds() / 3600
+        now = datetime.utcnow()
+        
+        if hasattr(problem_created_at, 'tzinfo') and problem_created_at.tzinfo is not None:
+            timestamp = problem_created_at.timestamp()
+            problem_created_at_naive = datetime.utcfromtimestamp(timestamp)
+        else:
+            problem_created_at_naive = problem_created_at
+        
+        hours_elapsed = (now - problem_created_at_naive).total_seconds() / 3600
         escalation_periods = hours_elapsed / self.ESCALATION_HOURS
         
         golden_factor = self.GOLDEN_RATIO ** escalation_periods
@@ -49,7 +59,7 @@ class GameService:
         cost = self.BASE_COST * golden_factor * (1 + urgency_factor * 0.1)
         
         return round(min(cost, 100.0), 2)
-    
+        
     def hash_answer(self, answer: str) -> str:
         """Hash an answer for secure comparison"""
         return hashlib.sha256(answer.lower().strip().encode()).hexdigest()
@@ -85,11 +95,12 @@ class GameService:
         await db.flush() 
         
         starting_amount = rollover_amount if rollover_amount else self.BASE_PRIZE_POOL
+        starting_amount_decimal = Decimal(str(starting_amount))
         
         new_prize_pool = PrizePool(
             problem_id=new_problem.id,
-            pool_amount=starting_amount,
-            base_amount=starting_amount
+            pool_amount=starting_amount_decimal,
+            base_amount=starting_amount_decimal
         )
         db.add(new_prize_pool)
         
@@ -122,7 +133,7 @@ class GameService:
             access_token=user.payman_access_token,
             amount=cost,
             description=f"Attempt for Problem #{problem.id}",
-            user_id=user.payman_id
+            user_id=user.payman_id,
         )
         
         if charge_result.get("error") == "TOKEN_EXPIRED":
@@ -154,12 +165,12 @@ class GameService:
         )
         prize_pool = result.scalar_one_or_none()
         if prize_pool:
-            prize_pool.pool_amount += cost
+            prize_pool.pool_amount += Decimal(str(cost))
         else:
             new_pool = PrizePool(
                 problem_id=problem.id,
-                pool_amount=cost + self.BASE_PRIZE_POOL, 
-                base_amount=self.BASE_PRIZE_POOL
+                pool_amount=Decimal(str(cost)) + Decimal(str(self.BASE_PRIZE_POOL)), 
+                base_amount=Decimal(str(self.BASE_PRIZE_POOL))
             )
             db.add(new_pool)
         
@@ -169,7 +180,16 @@ class GameService:
             return await self.handle_winner(user, problem, attempt, db)
         else:
             current_pool = await self.get_current_prize_pool(problem.id, db)
-            hours_elapsed = (datetime.utcnow() - problem.created_at).total_seconds() / 3600
+            
+            now = datetime.utcnow()
+            
+            if hasattr(problem.created_at, 'tzinfo') and problem.created_at.tzinfo is not None:
+                timestamp = problem.created_at.timestamp()
+                problem_time = datetime.utcfromtimestamp(timestamp)
+            else:
+                problem_time = problem.created_at
+
+            hours_elapsed = (now - problem_time).total_seconds() / 3600
             
             return {
                 "success": True,
@@ -183,16 +203,25 @@ class GameService:
     async def handle_winner(self, user: User, problem: Problem, attempt: Attempt, db: AsyncSession) -> dict:
         """Handle winner: payout 80%, rollover 20%, start new game"""
         current_pool = await self.get_current_prize_pool(problem.id, db)
-        winner_payout = round(current_pool * self.WINNER_RATIO, 2)
-        rollover_amount = round(current_pool * self.ROLLOVER_RATIO, 2)
+        
+        current_pool_decimal = Decimal(str(current_pool))
+        winner_ratio_decimal = Decimal(str(self.WINNER_RATIO))
+        rollover_ratio_decimal = Decimal(str(self.ROLLOVER_RATIO))
+
+        winner_payout = round(current_pool_decimal * winner_ratio_decimal, 2)
+        rollover_amount = round(current_pool_decimal * rollover_ratio_decimal, 2)
+        
+        # Convert back to float for API responses
+        winner_payout_float = float(winner_payout)
+        rollover_amount_float = float(rollover_amount)
 
         if not user.payman_id:
             return {"error": "Your wallet is connected but missing a Payman ID. Please reconnect with /start"}
         
         payout_result = await payman_service.payout_winner(
             access_token=user.payman_access_token,
-            amount=winner_payout,
-            user_id=user.payman_id,
+            amount=winner_payout_float,
+            payee_id=user.payman_payee_id,
             description=f"🏆 Prize Pool Winner - Problem #{problem.id}"
         )
         
@@ -208,7 +237,7 @@ class GameService:
             prize_pool.winner_user_id = user.id
             prize_pool.paid_out = True
         
-        new_problem = await self.create_new_problem(db, rollover_amount)
+        new_problem = await self.create_new_problem(db, rollover_amount_float)
         
         await db.commit()
         
