@@ -5,7 +5,7 @@ from app.config import settings
 
 class PaymanService:
     def __init__(self):
-        self.payman_service_url = "http://localhost:3001" #move to env
+        self.payman_service_url = "https://lydia-vox3.onrender.com" #move to env
         self.client_id = settings.PAYMAN_CLIENT_ID
         self.redirect_uri = settings.PAYMAN_REDIRECT_URI
     
