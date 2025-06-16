@@ -1,4 +1,4 @@
-# Lydia - Mathematical Guessing Game Bot
+# Lydia - Telegram Game Bot
 
 Lydia is a Telegram bot that creates an engaging problem solving and guessing game with real monetary stakes using Payman for wallet connections and transactions.
 
