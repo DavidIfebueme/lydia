@@ -1,13 +1,14 @@
 import hashlib
 import math
-from datetime import datetime, timedelta
+from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_
 from app.models.problem import Problem
 from app.models.attempt import Attempt
 from app.models.user import User
 from app.models.prize_pool import PrizePool
 from app.services.payman_service import payman_service
+from app.services.problem_bank_service import problem_bank
 
 class GameService:
     def __init__(self):
@@ -18,6 +19,7 @@ class GameService:
         
         self.WINNER_RATIO = 0.80
         self.ROLLOVER_RATIO = 0.20 
+        self.BASE_PRIZE_POOL = 20.0
         
     def calculate_attempt_cost(self, problem_created_at: datetime) -> float:
         """
@@ -42,21 +44,14 @@ class GameService:
         
         golden_factor = self.GOLDEN_RATIO ** escalation_periods
         
-        urgency_factor = 1 + (math.e ** (hours_elapsed / 72) - 1) * 0.1
-
-        fibonacci_factor = 1 + (escalation_periods * 0.1)
+        urgency_factor = 1 + math.e ** (hours_elapsed / 72) - 1
         
-        cost = self.BASE_COST * golden_factor * urgency_factor * fibonacci_factor
+        cost = self.BASE_COST * golden_factor * (1 + urgency_factor * 0.1)
         
-        return min(cost, 100.0)
-    
-    async def get_current_problem(self, db: AsyncSession) -> Problem:
-        """Get the current active problem"""
-        result = await db.execute(select(Problem).where(Problem.is_active == True))
-        return result.scalar_one_or_none()
+        return round(min(cost, 100.0), 2)
     
     def hash_answer(self, answer: str) -> str:
-        """Hash an answer for comparison"""
+        """Hash an answer for secure comparison"""
         return hashlib.sha256(answer.lower().strip().encode()).hexdigest()
     
     def check_answer(self, guess: str, correct_answer_hash: str) -> bool:
@@ -64,33 +59,69 @@ class GameService:
         guess_hash = self.hash_answer(guess)
         return guess_hash == correct_answer_hash
     
+    async def get_current_problem(self, db: AsyncSession) -> Problem:
+        """Get the current active problem"""
+        result = await db.execute(select(Problem).where(Problem.is_active == True))
+        return result.scalar_one_or_none()
+    
     async def get_current_prize_pool(self, problem_id: int, db: AsyncSession) -> float:
         """Get current prize pool amount"""
         result = await db.execute(
             select(PrizePool).where(PrizePool.problem_id == problem_id)
         )
         prize_pool = result.scalar_one_or_none()
-        return float(prize_pool.pool_amount) if prize_pool else 20.0
+        return float(prize_pool.pool_amount) if prize_pool else self.BASE_PRIZE_POOL
     
-    async def calculate_winner_payout(self, total_pool: float) -> tuple[float, float]:
-        """Calculate winner payout (80%) and rollover (20%)"""
-        winner_amount = total_pool * self.WINNER_RATIO
-        rollover_amount = total_pool * self.ROLLOVER_RATIO
-        return winner_amount, rollover_amount
+    async def create_new_problem(self, db: AsyncSession, rollover_amount: float = None) -> Problem:
+        """Create a new problem with rollover from previous"""
+        problem_data = problem_bank.get_random_problem()
+        
+        new_problem = Problem(
+            question=problem_data["question"],
+            answer_hash=self.hash_answer(problem_data["answer"]),
+            is_active=True
+        )
+        db.add(new_problem)
+        await db.flush() 
+        
+        starting_amount = rollover_amount if rollover_amount else self.BASE_PRIZE_POOL
+        
+        new_prize_pool = PrizePool(
+            problem_id=new_problem.id,
+            pool_amount=starting_amount,
+            base_amount=starting_amount
+        )
+        db.add(new_prize_pool)
+        
+        await db.commit()
+        await db.refresh(new_problem)
+        
+        return new_problem
     
-
     async def process_attempt(self, user: User, guess: str, db: AsyncSession) -> dict:
-        """Process a user's guess attempt with token expiration handling"""
+        """Process a user's guess attempt"""
         problem = await self.get_current_problem(db)
         if not problem:
-            return {"error": "No active problem"}
+            problem = await self.create_new_problem(db)
         
         cost = self.calculate_attempt_cost(problem.created_at)
+
+        if not user.payman_id or not user.payman_id.startswith("wlt-"):
+            balance_data = await payman_service.get_balance(user.payman_access_token)
+            if balance_data.get("success") and balance_data.get("wallet_id"):
+                user.payman_id = balance_data.get("wallet_id")
+                await db.commit()
+                print(f"✅ Updated missing wallet ID: {user.payman_id}")
+            else:
+                return {
+                    "error": "Your wallet connection doesn't have a valid wallet ID. Please use /start to reconnect.",
+                    "wallet_id_missing": True
+                }
         
         charge_result = await payman_service.charge_user(
             access_token=user.payman_access_token,
             amount=cost,
-            description=f"Attempt for Problem #{problem.id} - Escalated Cost",
+            description=f"Attempt for Problem #{problem.id}",
             user_id=user.payman_id
         )
         
@@ -105,7 +136,7 @@ class GameService:
             }
         
         if not charge_result.get("success"):
-            return {"error": "Payment failed", "details": charge_result.get("error", "Unknown error")}
+            return {"error": f"💳 Payment failed: {charge_result.get('error', 'Unknown error')}"}
         
         is_correct = self.check_answer(guess, problem.answer_hash)
         
@@ -127,8 +158,8 @@ class GameService:
         else:
             new_pool = PrizePool(
                 problem_id=problem.id,
-                pool_amount=cost + 20.0, 
-                base_amount=20.0
+                pool_amount=cost + self.BASE_PRIZE_POOL, 
+                base_amount=self.BASE_PRIZE_POOL
             )
             db.add(new_pool)
         
@@ -136,33 +167,48 @@ class GameService:
         
         if is_correct:
             return await self.handle_winner(user, problem, attempt, db)
-        
-        return {
-            "success": True,
-            "is_correct": False,
-            "cost": cost,
-            "attempt_id": attempt.id,
-            "current_pool": await self.get_current_prize_pool(problem.id, db),
-            "hours_elapsed": (datetime.utcnow() - problem.created_at).total_seconds() / 3600
-        }
+        else:
+            current_pool = await self.get_current_prize_pool(problem.id, db)
+            hours_elapsed = (datetime.utcnow() - problem.created_at).total_seconds() / 3600
+            
+            return {
+                "success": True,
+                "is_correct": False,
+                "cost": cost,
+                "attempt_id": attempt.id,
+                "current_pool": current_pool,
+                "hours_elapsed": hours_elapsed
+            }
     
     async def handle_winner(self, user: User, problem: Problem, attempt: Attempt, db: AsyncSession) -> dict:
         """Handle winner: payout 80%, rollover 20%, start new game"""
         current_pool = await self.get_current_prize_pool(problem.id, db)
-        winner_payout, rollover_amount = await self.calculate_winner_payout(current_pool)
+        winner_payout = round(current_pool * self.WINNER_RATIO, 2)
+        rollover_amount = round(current_pool * self.ROLLOVER_RATIO, 2)
+
+        if not user.payman_id:
+            return {"error": "Your wallet is connected but missing a Payman ID. Please reconnect with /start"}
         
         payout_result = await payman_service.payout_winner(
             access_token=user.payman_access_token,
             amount=winner_payout,
             user_id=user.payman_id,
-            description=f"🏆 Prize Pool Winner - Problem #{problem.id} - {winner_payout:.2f}"
+            description=f"🏆 Prize Pool Winner - Problem #{problem.id}"
         )
         
         problem.is_active = False
         problem.ended_at = datetime.utcnow()
-        problem.winner_user_id = user.id
         
-        await self.create_next_problem(rollover_amount, db)
+        result = await db.execute(
+            select(PrizePool).where(PrizePool.problem_id == problem.id)
+        )
+        prize_pool = result.scalar_one_or_none()
+        
+        if prize_pool:
+            prize_pool.winner_user_id = user.id
+            prize_pool.paid_out = True
+        
+        new_problem = await self.create_new_problem(db, rollover_amount)
         
         await db.commit()
         
@@ -170,44 +216,16 @@ class GameService:
             "success": True,
             "is_correct": True,
             "is_winner": True,
-            "cost": attempt.amount_charged,
-            "total_pool": current_pool,
-            "winner_payout": winner_payout,
-            "rollover_amount": rollover_amount,
+            "cost": float(attempt.amount_charged),
+            "total_pool": float(current_pool),
+            "winner_payout": float(winner_payout),
+            "rollover_amount": float(rollover_amount),
             "payout_result": payout_result,
-            "attempt_id": attempt.id
+            "attempt_id": attempt.id,
+            "new_problem": {
+                "id": new_problem.id,
+                "question": new_problem.question
+            }
         }
-    
-    async def create_next_problem(self, rollover_amount: float, db: AsyncSession):
-        """Create the next problem with rollover amount as base"""
-        sample_problems = [
-            {"question": "I speak without a mouth and hear without ears. What am I?", "answer": "echo"},
-            {"question": "What has keys but no locks, space but no room?", "answer": "keyboard"},
-            {"question": "The more you take, the more you leave behind. What am I?", "answer": "footsteps"},
-            {"question": "What can travel around the world while staying in a corner?", "answer": "stamp"},
-            {"question": "What gets sharper the more you use it?", "answer": "brain"}
-        ]
-        
-        import random
-        chosen = random.choice(sample_problems)
-        answer_hash = self.hash_answer(chosen["answer"])
-        
-        new_problem = Problem(
-            question=chosen["question"],
-            answer_hash=answer_hash,
-            is_active=True
-        )
-        db.add(new_problem)
-        await db.flush()
-        
-        new_prize_pool = PrizePool(
-            problem_id=new_problem.id,
-            pool_amount=rollover_amount,
-            base_amount=rollover_amount
-        )
-        db.add(new_prize_pool)
-        
-        print(f"🎯 New problem created: {chosen['question']}")
-        print(f"💰 Starting pool: ${rollover_amount:.2f}")
 
 game_service = GameService()

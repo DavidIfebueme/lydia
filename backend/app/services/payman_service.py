@@ -1,4 +1,5 @@
 import httpx
+import re
 from typing import Dict, Any, Optional
 from app.config import settings
 
@@ -15,7 +16,7 @@ class PaymanService:
     async def exchange_code_for_token(self, code: str) -> Dict[str, Any]:
         """Exchange OAuth code for access token"""
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=100.0) as client:
                 response = await client.post(
                     f"{self.payman_service_url}/oauth/exchange",
                     json={"code": code}
@@ -69,7 +70,6 @@ class PaymanService:
                 
                 response_data = response.json()
                 
-                # Check for token expiration
                 if response.status_code == 401 or "unauthorized" in str(response_data).lower() or "expired" in str(response_data).lower():
                     return {"error": "TOKEN_EXPIRED", "details": "Access token has expired"}
                 
@@ -79,7 +79,7 @@ class PaymanService:
             return {"error": f"Network error during payout: {str(e)}"}
     
     async def get_balance(self, access_token: str) -> Dict[str, Any]:
-        """Get user's wallet balance with proper error handling and token validation"""
+        """Get user's wallet balance with wallet ID extraction"""
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
@@ -88,71 +88,61 @@ class PaymanService:
                 )
                 
                 print(f"🔍 Balance response status: {response.status_code}") 
-                print(f"🔍 Balance response text: {response.text}") 
                 
-                # Check for successful HTTP response
-                if response.status_code == 200:
-                    try:
-                        response_data = response.json()
-                        print(f"🔍 Parsed response data: {response_data}")
-                        
-                        # Check for token expiration in the response
-                        if ("error" in response_data and 
-                            ("unauthorized" in str(response_data["error"]).lower() or 
-                             "expired" in str(response_data["error"]).lower() or
-                             "token" in str(response_data["error"]).lower())):
-                            return {
-                                "success": False,
-                                "error": "TOKEN_EXPIRED",
-                                "details": "Access token has expired"
-                            }
-                        
-                        # Check if the response indicates success
-                        if response_data.get('success'):
-                            return {
-                                "success": True,
-                                "balance": response_data.get('balance'),
-                                "method": "payman_api"
-                            }
-                        else:
-                            return {
-                                "success": False,
-                                "error": response_data.get('error', 'Unknown error from Payman service'),
-                                "details": response_data.get('details', 'No additional details')
-                            }
-                            
-                    except Exception as json_error:
-                        print(f"🚨 JSON parsing error: {str(json_error)}")
-                        return {
-                            "success": False,
-                            "error": f"Invalid JSON response: {str(json_error)}"
-                        }
-                
-                # Handle HTTP errors
-                elif response.status_code == 401:
+                if response.status_code == 401:
                     return {
                         "success": False,
                         "error": "TOKEN_EXPIRED",
                         "details": "HTTP 401 - Access token has expired"
                     }
-                else:
+                    
+                if response.status_code != 200:
                     return {
                         "success": False,
-                        "error": f"HTTP {response.status_code}: {response.text}"
+                        "error": f"HTTP error {response.status_code}",
+                        "details": response.text
                     }
                     
-        except httpx.TimeoutException:
-            print("🚨 Balance service timeout")
-            return {
-                "success": False,
-                "error": "Request timeout - Payman servers may be slow"
-            }
-        except httpx.ConnectError:
-            print("🚨 Balance service connection error")
-            return {
-                "success": False,
-                "error": "Connection failed - Payman service may be down"
-            }
+                try:
+                    response_data = response.json()
+                    
+                    wallet_id = None
+                    
+                    if response_data.get('success') and response_data.get('balance'):
+                        balance_data = response_data.get('balance')
+                        
+                        if isinstance(balance_data, dict) and balance_data.get('artifacts'):
+                            artifacts = balance_data.get('artifacts', [])
+                            
+                            for artifact in artifacts:
+                                if artifact.get('name') == 'response' and artifact.get('content'):
+                                    content = artifact.get('content')
+
+                                    patterns = [
+                                        r'\|\s*(wlt-[a-f0-9-]+)\s*\|', 
+                                        r'(wlt-[a-f0-9-]+)'
+                                    ]
+                                    
+                                    for pattern in patterns:
+                                        wallet_match = re.search(pattern, content)
+                                        if wallet_match:
+                                            wallet_id = wallet_match.group(1)
+                                            print(f"✅ Found wallet ID: {wallet_id}")
+                                            break
+                    
+                    return {
+                        "success": True,
+                        "balance": response_data.get('balance'),
+                        "wallet_id": wallet_id
+                    }
+                        
+                except Exception as json_error:
+                    print(f"🚨 JSON parsing error: {str(json_error)}")
+                    return {
+                        "success": False,
+                        "error": f"Invalid response: {str(json_error)}"
+                    }
+                    
         except Exception as e:
             print(f"🚨 Balance service exception: {str(e)}")
             return {

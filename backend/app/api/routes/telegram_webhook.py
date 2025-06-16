@@ -5,8 +5,9 @@ from app.services.telegram_service import telegram_service
 from app.services.payman_service import payman_service
 from app.services.game_service import game_service
 from app.models.user import User
+from app.models.attempt import Attempt
 from app.config import settings
-from sqlalchemy import select
+from sqlalchemy import select, func
 from datetime import datetime, timedelta
 import json
 
@@ -47,7 +48,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
     except Exception as e:
         print(f"Error processing webhook: {e}")
         return {"status": "error"}
-
+    
 async def handle_start_command(chat_id: int, user: User, db: AsyncSession, username: str, first_name: str, user_id: int):
     """Handle /start command"""
     if not user:
@@ -93,7 +94,7 @@ Type /balance to check your wallet.
 
 
 async def handle_balance_command(chat_id: int, user: User, db: AsyncSession = None):
-    """Handle /balance command with token expiration handling"""
+    """Handle /balance command with wallet ID extraction"""
     if not user or not user.payman_access_token:
         message = """
 ❌ <b>Wallet Not Connected</b>
@@ -103,7 +104,34 @@ Connect your wallet first with /start
     else:
         try:
             balance_data = await payman_service.get_balance(user.payman_access_token)
-            #print(f"🔍 Balance data received: {balance_data}")
+            print(f"🔄 Checking wallet balance")
+            print(f"✅ Balance check successful")
+            print(f"Balance data: {balance_data}")
+            
+            if not user.payman_id or not user.payman_id.startswith("wlt-"):
+                wallet_id = None
+                if balance_data.get("success") and balance_data.get("balance"):
+                    wallet_data = balance_data.get("balance")
+                    if wallet_data.get("artifacts"):
+                        for artifact in wallet_data.get("artifacts", []):
+                            if artifact.get("name") == "response" and artifact.get("content"):
+                                content = artifact.get("content")
+                                patterns = [
+                                    r'\|\s*(wlt-[a-f0-9-]+)\s*\|', 
+                                    r'(wlt-[a-f0-9-]+)' 
+                                ]
+                                
+                                for pattern in patterns:
+                                    wallet_match = re.search(pattern, content)
+                                    if wallet_match:
+                                        wallet_id = wallet_match.group(1)
+                                        print(f"✅ Found wallet ID: {wallet_id}")
+                                        break
+                
+                if wallet_id and db:
+                    user.payman_id = wallet_id
+                    await db.commit()
+                    print(f"✅ Updated user with wallet ID from balance check: {wallet_id}")
             
             if balance_data.get('error') == 'TOKEN_EXPIRED':
                 print(f"🔄 Token expired for user {user.telegram_id}, clearing stored token")
@@ -128,11 +156,9 @@ This happens periodically for security. After reconnecting, your balance will be
             elif balance_data.get('success'):
                 wallet_response = balance_data.get('balance', {})
                 
-                # Extract wallet information from the AI response
-                if isinstance(wallet_response, dict) and wallet_response.get('status') == 'COMPLETED' and 'artifacts' in wallet_response:
+                if isinstance(wallet_response, dict) and wallet_response.get('artifacts'):
                     artifacts = wallet_response.get('artifacts', [])
                     
-                    # Find the response artifact
                     wallet_info = None
                     for artifact in artifacts:
                         if artifact.get('name') == 'response':
@@ -140,15 +166,15 @@ This happens periodically for security. After reconnecting, your balance will be
                             break
                     
                     if wallet_info:
-                        clean_wallet_info = wallet_info.replace('|', '').replace('-', '').strip()
+                        wallet_id_display = f"Wallet ID: {user.payman_id[:10]}..." if user.payman_id else ""
                         
                         message = f"""
 💰 <b>Your Wallet Balance</b>
 
-{clean_wallet_info}
+{wallet_info}
 
 <b>Status:</b> ✅ Connected
-<b>Last Updated:</b> {wallet_response.get('timestamp', 'Unknown')[:19]}
+{wallet_id_display}
                         """
                     else:
                         message = """
@@ -158,20 +184,12 @@ This happens periodically for security. After reconnecting, your balance will be
 
 <b>Status:</b> Connected
                         """
-                elif isinstance(wallet_response, dict):
+                else:
                     balance_text = str(wallet_response).replace('{', '').replace('}', '').replace("'", "")
                     message = f"""
 💰 <b>Your Wallet Balance</b>
 
 {balance_text}
-
-<b>Status:</b> ✅ Connected
-                    """
-                else:
-                    message = f"""
-💰 <b>Your Wallet Balance</b>
-
-{wallet_response}
 
 <b>Status:</b> ✅ Connected
                     """
@@ -202,144 +220,146 @@ Your wallet connection may have expired. Try /start to reconnect.
 
 
 async def handle_help_command(chat_id: int):
-    """Handle /help command"""
-    help_message = """
-🤖 <b>Lydia Commands</b>
+    """Show help message"""
+    message = """
+🤖 <b>Lydia Bot - Help</b>
 
-/start - Get started or reconnect wallet
-/problem - View current challenge
-/help - Show this help message
+<b>Commands:</b>
+/start - Connect wallet & start playing
+/problem - Show current problem 
+/balance - Check your wallet balance
 
 <b>How to Play:</b>
-1. Connect your Payman wallet
-2. View the current problem/riddle
-3. Submit your guess (costs a small fee)
-4. First correct answer wins the prize pool!
+1️⃣ Use /start to connect wallet
+2️⃣ Check current problem with /problem
+3️⃣ Send your answer as a message
+4️⃣ If correct, win prize immediately! 
+5️⃣ If wrong, try again (cost increases over time)
 
-<b>Game Rules:</b>
-• Each guess costs a small amount
-• Prize pool grows with each incorrect guess
-• Winner gets 80% of the pool
-• 20% rolls over to the next round
-• Guess cost increases every 6 hours
+<b>Prize Info:</b>
+- Prize pool grows with each attempt
+- First correct answer wins 80% of pool
+- 20% rolls over to next problem
+- Price increases over time using Golden Ratio and e
+
+Good luck! 🍀
     """
-    
-    await telegram_service.send_message(chat_id, help_message)
-
-async def handle_problem_command(chat_id: int, user: User, db: AsyncSession):
-    """Handle /problem command with escalation info"""
-    if not user or not user.payman_access_token:
-        message = """
-❌ <b>Wallet Not Connected</b>
-
-You need to connect your Payman wallet first!
-Type /start to get the connection link.
-        """
-    else:
-        problem = await game_service.get_current_problem(db)
-        if not problem:
-            message = """
-❌ <b>No Active Problem</b>
-
-There's currently no active problem. A new one will be available soon!
-            """
-        else:
-            current_pool = await game_service.get_current_prize_pool(problem.id, db)
-            current_cost = game_service.calculate_attempt_cost(problem.created_at)
-            hours_elapsed = (datetime.utcnow() - problem.created_at).total_seconds() / 3600
-            
-            next_escalation_hours = ((int(hours_elapsed / 6) + 1) * 6) - hours_elapsed
-            next_cost = game_service.calculate_attempt_cost(
-                problem.created_at - timedelta(hours=next_escalation_hours)
-            )
-            
-            escalation_info = ""
-            if hours_elapsed > 0:
-                escalation_info = f"""
-⏰ <b>Time Dynamics:</b>
-• Problem active for: {hours_elapsed:.1f} hours
-• Next cost increase in: {next_escalation_hours:.1f} hours
-• Next attempt cost: ${next_cost:.2f}
-                """
-            
-            message = f"""
-🧩 <b>Current Challenge</b>
-
-<b>Problem:</b> {problem.question}
-
-💰 <b>Current Prize Pool:</b> ${current_pool:.2f}
-💸 <b>Attempt Cost:</b> ${current_cost:.2f}
-{escalation_info}
-
-<b>📊 Game Economics:</b>
-• Winner receives: 80% (${current_pool * 0.8:.2f})
-• Next game starts with: 20% (${current_pool * 0.2:.2f})
-
-Send me your answer to make a guess!
-            """
-    
     await telegram_service.send_message(chat_id, message)
 
 
-async def handle_guess_attempt(chat_id: int, user: User, guess: str, db: AsyncSession):
-    """Handle a guess attempt with mathematical cost escalation"""
+async def handle_problem_command(chat_id: int, user: User, db: AsyncSession):
+    """Show the current problem and stats"""
+    problem = await game_service.get_current_problem(db)
+    
+    if not problem:
+        message = """
+⚠️ <b>No Active Problem</b>
+
+There's no active problem at the moment. One will be created when the first player starts.
+        """
+        await telegram_service.send_message(chat_id, message)
+        return
+
+    current_pool = await game_service.get_current_prize_pool(problem.id, db)
+    
+    attempts_result = await db.execute(
+        select(func.count(Attempt.id)).where(Attempt.problem_id == problem.id)
+    )
+    total_attempts = attempts_result.scalar_one()
+    
+    hours_elapsed = (datetime.utcnow() - problem.created_at).total_seconds() / 3600
+    current_cost = game_service.calculate_attempt_cost(problem.created_at)
+    
+    message = f"""
+🧩 <b>Current Problem</b> #{problem.id}
+
+{problem.question}
+
+🏆 <b>Prize Pool:</b> ${current_pool:.2f}
+💰 <b>Current Cost:</b> ${current_cost:.2f}
+⏱️ <b>Time Elapsed:</b> {hours_elapsed:.1f} hours
+🔢 <b>Attempts:</b> {total_attempts}
+
+<b>To solve:</b> Just type your answer and send it!
+    """
+    
+    await telegram_service.send_message(chat_id, message)
+
+async def handle_guess_attempt(chat_id: int, user: User, text: str, db: AsyncSession):
+    """Handle user's guess/attempt"""
     if not user or not user.payman_access_token:
         message = """
 ❌ <b>Wallet Not Connected</b>
 
-You need to connect your Payman wallet to make guesses!
-Type /start to get started.
+Please connect your Payman wallet first with /start command.
         """
         await telegram_service.send_message(chat_id, message)
         return
     
-    result = await game_service.process_attempt(user, guess, db)
+    result = await game_service.process_attempt(user, text, db)
+
+    if result.get("token_expired"):
+        message = f"""
+🔄 <b>Wallet Connection Expired</b>
+
+Your Payman wallet connection has expired. Please reconnect:
+
+/start - Connect wallet
+        """
+        await telegram_service.send_message(chat_id, message)
+        return
     
     if "error" in result:
         message = f"""
-❌ <b>Attempt Failed</b>
+⚠️ <b>Error</b>
 
-{result['error']}
+{result.get("error")}
 
-Try again or check your wallet balance!
+Please try again or check your wallet balance with /balance
         """
-    elif result.get("is_winner"):
-        message = f"""
-🎉🏆 <b>WINNER! CONGRATULATIONS!</b> 🏆🎉
-
-Your guess: "<b>{guess}</b>" is CORRECT!
-
-💰 Attempt Cost: ${result['cost']:.2f}
-🏆 Total Prize Pool: ${result['total_pool']:.2f}
-💸 Your Payout: ${result['winner_payout']:.2f}
-🔄 Next Game Pool: ${result['rollover_amount']:.2f}
-
-<b>🎯 Payment processing...</b>
-You'll receive your winnings shortly!
-
-A new challenge is now active! Type /problem to see it.
-        """
-    elif result["is_correct"]:
-        message = f"""
-🎉 <b>CORRECT ANSWER!</b> 🎉
-
-Your guess: "<b>{guess}</b>" is right!
-But processing winner status...
-        """
-    else:
-        hours_elapsed = result.get("hours_elapsed", 0)
-        escalation_info = ""
-        if hours_elapsed > 6:
-            escalation_info = f"\n⏰ Cost escalated after {hours_elapsed:.1f} hours"
+        await telegram_service.send_message(chat_id, message)
+        return
+    
+    if result.get("success") and not result.get("is_correct"):
+        pool = result.get("current_pool", 0)
+        cost = result.get("cost", 0)
+        hours = result.get("hours_elapsed", 0)
         
         message = f"""
-❌ <b>Incorrect</b>
+❌ <b>Incorrect Answer</b>
 
-Your guess: "<b>{guess}</b>"
-💰 Charged: ${result['cost']:.2f}{escalation_info}
-💰 Current Prize Pool: ${result['current_pool']:.2f}
+You paid <b>${cost:.2f}</b> for this attempt.
 
-The challenge continues! Try again or wait for cost to escalate.
+🏆 <b>Current Prize Pool:</b> ${pool:.2f}
+⏱️ <b>Time Elapsed:</b> {hours:.1f} hours
+
+Keep trying! Send another answer as text.
         """
+        await telegram_service.send_message(chat_id, message)
+        return
     
-    await telegram_service.send_message(chat_id, message)
+    if result.get("is_winner"):
+        winner_payout = result.get("winner_payout", 0)
+        total_pool = result.get("total_pool", 0)
+        rollover = result.get("rollover_amount", 0)
+        cost = result.get("cost", 0)
+        new_problem = result.get("new_problem", {})
+        
+        message = f"""
+🎉 <b>CONGRATULATIONS! YOU WON!</b> 🎉
+
+You solved the problem correctly and won:
+💰 <b>${winner_payout:.2f}</b> of the ${total_pool:.2f} prize pool!
+
+Your final attempt cost: ${cost:.2f}
+Payout Status: {"✅ Sent to your wallet!" if result.get("payout_result", {}).get("success") else "⏳ Processing..."}
+
+${rollover:.2f} has been rolled over to the next problem:
+
+🆕 <b>New Problem:</b>
+{new_problem.get("question")}
+
+Good luck!
+        """
+        await telegram_service.send_message(chat_id, message)
+        return

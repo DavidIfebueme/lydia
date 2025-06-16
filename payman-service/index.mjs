@@ -4,6 +4,7 @@ import { PaymanClient } from "@paymanai/payman-ts";
 import dotenv from "dotenv";
 import https from "https";
 import http from "http";
+import { randomInt } from "crypto";
 
 dotenv.config();
 
@@ -96,12 +97,58 @@ app.post("/oauth/exchange", async (req, res) => {
     console.log("✅ Token exchange successful");
     console.log("Access token length:", tokenResponse.accessToken?.length || 0);
 
-    res.json({
-      success: true,
-      accessToken: tokenResponse.accessToken,
-      expiresIn: tokenResponse.expiresIn,
-      userId: tokenResponse.userId || tokenResponse.user_id || "unknown"
-    });
+    const payeeName = `Test Payee ${Date.now()}`;
+    console.log("🔄 Creating test payee with name:", payeeName);
+
+    let payeeId = null;
+    try {
+      const payeeResponse = await client.ask(`create a test payee for this account with name ${payeeName}`);
+      console.log("Payee created response:", payeeResponse);
+      
+      if (payeeResponse?.artifacts) {
+        for (const artifact of payeeResponse.artifacts) {
+          if (artifact.name === 'response' && artifact.content) {
+            console.log("Found response artifact with content");
+            const content = artifact.content;
+            
+            const pdIndex = content.indexOf('pd-');
+            
+            if (pdIndex !== -1) {
+              const payeeIdStart = content.substring(pdIndex);
+              const idPattern = /pd-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/;
+              const match = payeeIdStart.match(idPattern);
+              
+              if (match && match[0]) {
+                payeeId = match[0];
+                console.log("✅ Extracted Payee ID:", payeeId);
+              } else {
+                const simpleMatch = payeeIdStart.match(/^(pd-[a-f0-9-]+)/);
+                if (simpleMatch && simpleMatch[1]) {
+                  payeeId = simpleMatch[1];
+                  console.log("✅ Extracted Payee ID (simple method):", payeeId);
+                } else {
+                  console.log("Could not extract payee ID with standard patterns");
+                }
+              }
+            } else {
+              console.log("No pd- pattern found in response content");
+            }
+          }
+        }
+      }
+        } catch (err) {
+          console.error("Error creating payee:", err);
+        }
+
+        const responseData = {
+          success: true,
+          accessToken: tokenResponse.accessToken,
+          expiresIn: tokenResponse.expiresIn,
+          userId: tokenResponse.paymanUserId || tokenResponse.payman_user_id || "unknown",
+          payeeId: payeeId
+        };
+
+        res.json(responseData);
 
   } catch (error) {
     console.error("Token exchange failed:", error.message);
@@ -123,12 +170,14 @@ app.post("/charge", async (req, res) => {
     const { accessToken, amount, description, userId } = req.body;
     console.log(`🔄 Attempting to charge $${amount} for: ${description}`);
     
+    const APP_WALLET_ID = process.env.PAYMAN_APP_WALLET_ID;
+    
     const client = PaymanClient.withToken(config.clientId, {
       accessToken,
       expiresIn: 3600
     });
     
-    const result = await client.ask(`charge user ${userId} $${amount} for ${description}`);
+    const result = await client.ask(`charge user ${userId} $${amount} for ${description} and deposit to wallet ${APP_WALLET_ID}`);
     console.log("✅ Charge successful");
     res.json({ success: true, result });
     
@@ -147,12 +196,14 @@ app.post("/payout", async (req, res) => {
     const { accessToken, amount, userId, description } = req.body;
     console.log(`🔄 Attempting payout of $${amount} to user ${userId}`);
     
+    const APP_WALLET_ID = process.env.PAYMAN_APP_WALLET_ID;
+    
     const client = PaymanClient.withToken(config.clientId, {
       accessToken,
       expiresIn: 3600
     });
     
-    const result = await client.ask(`send $${amount} to user ${userId} for ${description}`);
+    const result = await client.ask(`send $${amount} from wallet ${APP_WALLET_ID} to user ${userId} for ${description}`);
     console.log("✅ Payout successful");
     res.json({ success: true, result });
     

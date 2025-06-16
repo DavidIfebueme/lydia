@@ -8,6 +8,8 @@ from app.services.payman_service import payman_service
 from app.services.telegram_service import telegram_service
 from app.config import settings
 
+import re
+
 router = APIRouter()
 
 @router.get("/connect")
@@ -136,6 +138,7 @@ async def oauth_connect_page(user_id: str):
                     
                     if (result.success) {{
                         updateStatus('Token received! Updating user...');
+                        console.log('Got payee ID:', result.payeeId); // Debug output
                         
                         // Update user in database
                         const telegramUserId = localStorage.getItem('telegram_user_id');
@@ -147,7 +150,8 @@ async def oauth_connect_page(user_id: str):
                                     code: code,
                                     telegram_user_id: telegramUserId,
                                     access_token: result.accessToken,
-                                    payman_user_id: result.userId
+                                    payman_user_id: result.userId,
+                                    payee_id: result.payeeId  // Include the payee ID here
                                 }})
                             }});
                             
@@ -155,7 +159,7 @@ async def oauth_connect_page(user_id: str):
                             console.log('Notification result:', notifyResult);
                             
                             if (notifyResult.success) {{
-                                updateStatus('✅ Wallet connected successfully!');
+                                updateStatus(`✅ Wallet connected successfully!${{result.payeeId ? ' Payee ID received.' : ''}}`);
                                 setTimeout(() => {{
                                     window.close();
                                 }}, 2000);
@@ -199,7 +203,8 @@ async def oauth_token_exchange(request: Request):
             "success": True,
             "accessToken": token_data.get("accessToken"),
             "expiresIn": token_data.get("expiresIn"),
-            "userId": token_data.get("userId")
+            "userId": token_data.get("userId"),
+            "payeeId": token_data.get("payeeId"),
         }
         
     except Exception as e:
@@ -238,30 +243,76 @@ async def oauth_callback(request: Request):
     
     return HTMLResponse("<h1>❌ No authorization code received</h1>")
 
-
 @router.post("/notify-success")
 async def notify_success(request: Request, db: AsyncSession = Depends(get_db)):
-    """Update user with OAuth success"""
+    """Update user with OAuth success and fetch wallet ID"""
     try:
         data = await request.json()
         telegram_user_id = data.get("telegram_user_id")
         access_token = data.get("access_token")
-        payman_user_id = data.get("user_id")
+        payee_id = data.get("payee_id")
+        
+        print(f"🔄 Received OAuth success for Telegram user {telegram_user_id}")
         
         result = await db.execute(select(User).where(User.telegram_id == telegram_user_id))
         user = result.scalar_one_or_none()
         
-        if user:
-            user.payman_id = payman_user_id
-            user.payman_access_token = access_token
+        if not user:
+            print(f"❌ User {telegram_user_id} not found")
+            return {"success": False, "error": "User not found"}
+        
+        user.payman_access_token = access_token
+        user.payman_payee_id = payee_id
+        await db.commit()
+        
+        print("🔄 Getting wallet ID via balance check...")
+        balance_data = await payman_service.get_balance(access_token)
+        print(f"🔍 Balance data received, extracting wallet ID...")
+        
+        wallet_id = None
+        if balance_data.get("success") and balance_data.get("balance"):
+            wallet_data = balance_data.get("balance")
+            
+            if isinstance(wallet_data, dict):
+                print(f"🔍 Keys in wallet_data: {list(wallet_data.keys())}")
+                
+                if wallet_data.get("artifacts"):
+                    artifacts = wallet_data.get("artifacts")
+                    print(f"🔍 Found {len(artifacts)} artifacts")
+                    
+                    for i, artifact in enumerate(artifacts):
+                        if artifact.get("name") == "response" and artifact.get("content"):
+                            content = artifact.get("content")
+                            print(f"🔍 Found response content in artifact #{i}")
+                            
+                            patterns = [
+                                r'Wallet ID.*?(\bwlt-[a-f0-9-]+)',
+                                r'\|\s*(wlt-[a-f0-9-]+)\s*\|',
+                                r'(wlt-[a-f0-9-]+)'
+                            ]
+                            
+                            for pattern in patterns:
+                                wallet_match = re.search(pattern, content)
+                                if wallet_match:
+                                    wallet_id = wallet_match.group(1)
+                                    print(f"✅ Found wallet ID using pattern {pattern}: {wallet_id}")
+                                    break
+                            
+                            if not wallet_id:
+                                print("❌ No wallet ID found in content. Raw content:")
+                                print(content[:500])
+        
+        if wallet_id:
+            user.payman_id = wallet_id 
             await db.commit()
             
             await telegram_service.send_message(
                 int(telegram_user_id),
-                """
+                f"""
 🎉 <b>Wallet Connected Successfully!</b>
 
 Your Payman wallet is now linked to Lydia!
+Wallet ID: {wallet_id[:10]}...
 
 You can now:
 ✅ Make guess attempts
@@ -271,7 +322,40 @@ You can now:
 Type /problem to see the current challenge!
                 """
             )
-        
-        return {"success": True}
+            
+            return {"success": True, "wallet_id": wallet_id}
+        else:
+            print("⚠️ WARNING: Could not extract wallet ID from balance response")
+            
+            if isinstance(balance_data.get("balance"), dict) and balance_data.get("balance").get("artifacts"):
+                try:
+                    artifacts = balance_data.get("balance").get("artifacts")
+                    for artifact in artifacts:
+                        if artifact.get("name") == "response" and artifact.get("content"):
+                            content = artifact.get("content")
+                            rows = content.split("\n")
+                            print("Table parsing attempt:")
+                            for row in rows:
+                                if "wlt-" in row:
+                                    print(f"Found wallet ID row: {row}")
+                except Exception as parse_error:
+                    print(f"Error parsing table: {parse_error}")
+            
+            await telegram_service.send_message(
+                int(telegram_user_id),
+                """
+🔄 <b>Wallet Partially Connected</b>
+
+Your Payman auth was successful, but we couldn't retrieve your wallet ID.
+
+Try using the /balance command. If you see your wallet balance, the connection will complete automatically.
+                """
+            )
+            
+            return {"success": True, "wallet_id": None, "warning": "No wallet ID found"}
+            
     except Exception as e:
+        print(f"❌ Error in notify-success: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return {"success": False, "error": str(e)}
