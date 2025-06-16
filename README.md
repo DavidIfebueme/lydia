@@ -5,7 +5,7 @@ Lydia is a Telegram bot that creates an engaging problem solving and guessing ga
 
 ## 🚀 Features
 
-- **Problem Solving and Guessing Games**: Solve puzzles and win cryptocurrency rewards
+- **Problem Solving and Guessing Games**: Solve puzzles and win real rewards
 - **Dynamic Cost Structure**: Uses the Golden Ratio and e to create a natural cost progression
 - **Real-Time Prize Pools**: See the prize pool grow as players make attempts
 - **Seamless Wallet Integration**: Connect your Payman wallet directly through Telegram
@@ -27,7 +27,7 @@ Lydia is a Telegram bot that creates an engaging problem solving and guessing ga
 
 ## 🧪 Testing the Bot
 
-1. **Find the Bot on Telegram**: Search for `@LydiaMathBot` or [click here](https://t.me/lydia_payman_bot)
+1. **Find the Bot on Telegram**: Search for `@Lydia_Payman_Bot` or [click here](https://t.me/lydia_payman_bot)
 2. **Connect Your Wallet**:
    - Send `/start` to the bot
    - Click the "Connect Your Payman Wallet" button
