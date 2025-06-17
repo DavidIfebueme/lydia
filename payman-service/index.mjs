@@ -168,22 +168,61 @@ app.post("/oauth/exchange", async (req, res) => {
 app.post("/charge", async (req, res) => {
   try {
     const { accessToken, amount, description, userId } = req.body;
-    console.log(`🔄 Attempting to charge $${amount} for: ${description}`);
+    console.log(`🔄 Attempting to charge $${amount} from wallet ${userId}`);
+    
+    if (!accessToken || !amount || !userId) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "Missing required fields: accessToken, amount, userId" 
+      });
+    }
     
     const APP_WALLET_ID = process.env.PAYMAN_APP_WALLET_ID;
+    if (!APP_WALLET_ID) {
+      return res.status(500).json({ 
+        success: false, 
+        error: "App wallet ID not configured" 
+      });
+    }
     
     const client = PaymanClient.withToken(config.clientId, {
       accessToken,
       expiresIn: 3600
     });
     
-    const result = await client.ask(`charge user ${userId} $${amount} for ${description} and deposit to wallet ${APP_WALLET_ID}`);
-    console.log("✅ Charge successful");
-    res.json({ success: true, result });
+    const command = `send $${amount} from wallet ${userId} to wallet ${APP_WALLET_ID} for "${description}"`;
+    console.log(`🗣️ Executing command: ${command}`);
+    
+    const result = await client.ask(command);
+    console.log("✅ Charge result:", result);
+    
+    let transactionSuccessful = false;
+    if (result?.artifacts) {
+      for (const artifact of result.artifacts) {
+        if (artifact.content && (
+          artifact.content.includes("Transaction completed") ||
+          artifact.content.includes("sent successfully") ||
+          artifact.content.includes("transfer completed")
+        )) {
+          transactionSuccessful = true;
+          break;
+        }
+      }
+    }
+    
+    res.json({ 
+      success: transactionSuccessful, 
+      result,
+      command,
+      walletFrom: userId,
+      walletTo: APP_WALLET_ID,
+      amount: amount
+    });
     
   } catch (error) {
     console.error("Charge failed:", error);
     res.status(500).json({ 
+      success: false,
       error: "Charge failed", 
       details: error.message,
       code: error.code 
@@ -194,52 +233,67 @@ app.post("/charge", async (req, res) => {
 app.post("/payout", async (req, res) => {
   try {
     const { accessToken, amount, payeeId, description } = req.body;
-    console.log(`🔄 Attempting payout of $${amount} to user ${payeeId}`);
+    console.log(`🔄 Attempting payout of $${amount} to payee ${payeeId}`);
+    
+    if (!accessToken || !amount || !payeeId) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "Missing required fields: accessToken, amount, payeeId" 
+      });
+    }
     
     const APP_WALLET_ID = process.env.PAYMAN_APP_WALLET_ID;
+    if (!APP_WALLET_ID) {
+      return res.status(500).json({ 
+        success: false, 
+        error: "App wallet ID not configured" 
+      });
+    }
     
     const client = PaymanClient.withToken(config.clientId, {
       accessToken,
       expiresIn: 3600
     });
     
-    const result = await client.ask(`send $${amount} from wallet ${APP_WALLET_ID} to payee ${payeeId} for ${description}`);
-    console.log("✅ Payout successful");
-    res.json({ success: true, result });
+    const command = `send $${amount} from wallet ${APP_WALLET_ID} to payee ${payeeId} for "${description}"`;
+    console.log(`🗣️ Executing command: ${command}`);
+    
+    const result = await client.ask(command);
+    console.log("✅ Payout result:", result);
+    
+    let transactionSuccessful = false;
+    if (result?.artifacts) {
+      for (const artifact of result.artifacts) {
+        if (artifact.content && (
+          artifact.content.includes("Transaction completed") ||
+          artifact.content.includes("sent successfully") ||
+          artifact.content.includes("transfer completed") ||
+          artifact.content.includes("Payment sent")
+        )) {
+          transactionSuccessful = true;
+          break;
+        }
+      }
+    }
+    
+    res.json({ 
+      success: transactionSuccessful, 
+      result,
+      command,
+      walletFrom: APP_WALLET_ID,
+      payeeTo: payeeId,
+      amount: amount
+    });
     
   } catch (error) {
     console.error("Payout failed:", error);
     res.status(500).json({ 
+      success: false,
       error: "Payout failed", 
       details: error.message 
     });
   }
 });
-
-app.post("/balance", async (req, res) => {
-  try {
-    const { accessToken } = req.body;
-    console.log("🔄 Checking wallet balance");
-    
-    const client = PaymanClient.withToken(config.clientId, {
-      accessToken,
-      expiresIn: 3600
-    });
-    
-    const result = await client.ask("list all my wallets and their balances");
-    console.log("✅ Balance check successful");
-    res.json({ success: true, balance: result });
-    console.log("Balance data:", result);
-    
-  } catch (error) {
-    console.error("Balance check failed:", error);
-    res.status(500).json({ 
-      error: "Balance check failed", 
-      details: error.message 
-    });
-  }
-});
-
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
@@ -249,7 +303,7 @@ process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
 });
 
-// Start server
+
 app.listen(PORT, () => {
   console.log(`🚀 Payman service running on port ${PORT}`);
   console.log(`📍 Health check: http://localhost:${PORT}/health`);

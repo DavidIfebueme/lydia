@@ -9,7 +9,7 @@ from app.models.user import User
 
 class PaymanService:
     def __init__(self):
-        self.payman_service_url = "https://lydia-vox3.onrender.com" #move to env
+        self.payman_service_url = settings.PAYMAN_SERVICE_URL
         self.client_id = settings.PAYMAN_CLIENT_ID
         self.redirect_uri = settings.PAYMAN_REDIRECT_URI
     
@@ -67,8 +67,10 @@ class PaymanService:
             return {"error": f"Network error during token exchange: {str(e)}"}
     
     async def charge_user(self, access_token: str, amount: float, description: str, user_id: str) -> Dict[str, Any]:
-        """Charge user for attempt with token validation"""
+        """Charge user for attempt with better validation"""
         try:
+            print(f"🔄 Attempting to charge ${amount} from wallet {user_id}")
+            
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
                     f"{self.payman_service_url}/charge",
@@ -80,32 +82,49 @@ class PaymanService:
                     }
                 )
                 
+                print(f"📥 Charge response status: {response.status_code}")
+                print(f"📄 Charge response: {response.text[:300]}...")
+                
                 if response.status_code == 401:
-                    return {"error": "TOKEN_EXPIRED", "details": "Access token has expired (HTTP 401)"}
+                    return {"success": False, "error": "TOKEN_EXPIRED", "details": "Access token has expired"}
                     
                 try:
                     response_data = response.json()
                 except Exception:
                     return {
+                        "success": False,
                         "error": f"Invalid response (HTTP {response.status_code})", 
                         "details": response.text[:100]
                     }
                 
-                if not response.status_code == 200 or "error" in response_data:
+                success = response_data.get("success", False)
+                
+                if not success:
+                    error_msg = response_data.get("error", "Unknown error")
+                    details = response_data.get("details", "No details provided")
                     return {
-                        "error": response_data.get("error", f"HTTP {response.status_code} error"),
-                        "details": response_data.get("details", response.text[:100])
+                        "success": False,
+                        "error": error_msg,
+                        "details": details
                     }
                 
-                return response_data
+                print(f"✅ Charge successful: ${amount} from wallet {user_id}")
+                return {
+                    "success": True,
+                    "result": response_data.get("result"),
+                    "command": response_data.get("command"),
+                    "amount": amount
+                }
                     
         except Exception as e:
-            return {"error": f"Network error during charge: {str(e)}"}
-    
-    async def payout_winner(self, access_token: str, amount: float, payee_id: str, description: str) -> Dict[str, Any]:
-        """Pay out winnings to user with token validation"""
+            print(f"🚨 Charge exception: {str(e)}")
+            return {"success": False, "error": f"Network error during charge: {str(e)}"}
 
+    async def payout_winner(self, access_token: str, amount: float, payee_id: str, description: str) -> Dict[str, Any]:
+        """Pay out winnings to user with better validation"""
         try:
+            print(f"🔄 Attempting payout of ${amount} to payee {payee_id}")
+            
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
                     f"{self.payman_service_url}/payout",
@@ -117,16 +136,44 @@ class PaymanService:
                     }
                 )
                 
-                response_data = response.json()
+                print(f"📥 Payout response status: {response.status_code}")
+                print(f"📄 Payout response: {response.text[:300]}...")
                 
-                if response.status_code == 401 or "unauthorized" in str(response_data).lower() or "expired" in str(response_data).lower():
-                    return {"error": "TOKEN_EXPIRED", "details": "Access token has expired"}
+                if response.status_code == 401:
+                    return {"success": False, "error": "TOKEN_EXPIRED", "details": "Access token has expired"}
+                    
+                try:
+                    response_data = response.json()
+                except Exception:
+                    return {
+                        "success": False,
+                        "error": f"Invalid response (HTTP {response.status_code})", 
+                        "details": response.text[:100]
+                    }
                 
-                return response_data
+                success = response_data.get("success", False)
                 
+                if not success:
+                    error_msg = response_data.get("error", "Unknown error")
+                    details = response_data.get("details", "No details provided")
+                    return {
+                        "success": False,
+                        "error": error_msg,
+                        "details": details
+                    }
+                
+                print(f"✅ Payout successful: ${amount} to payee {payee_id}")
+                return {
+                    "success": True,
+                    "result": response_data.get("result"),
+                    "command": response_data.get("command"),
+                    "amount": amount
+                }
+                    
         except Exception as e:
-            return {"error": f"Network error during payout: {str(e)}"}
-    
+            print(f"🚨 Payout exception: {str(e)}")
+            return {"success": False, "error": f"Network error during payout: {str(e)}"}
+        
     async def get_balance(self, access_token: str) -> Dict[str, Any]:
         """Get user's wallet balance with wallet ID extraction"""
         try:

@@ -11,5 +11,6 @@ class Settings:
     PAYMAN_CLIENT_SECRET: str = os.getenv("PAYMAN_CLIENT_SECRET")
     PAYMAN_REDIRECT_URI: str = os.getenv("PAYMAN_REDIRECT_URI")
     PAYMAN_APP_WALLET_ID: str = os.getenv("PAYMAN_APP_WALLET_ID")
+    PAYMAN_SERVICE_URL: str = os.getenv("PAYMAN_SERVICE_URL")
 
 settings = Settings()
