@@ -10,6 +10,7 @@ from app.config import settings
 from sqlalchemy import select, func
 from datetime import datetime, timedelta
 import json
+import re
 
 router = APIRouter()
 
@@ -62,7 +63,7 @@ async def handle_start_command(chat_id: int, user: User, db: AsyncSession, usern
         user = new_user
 
     if user.payman_access_token:
-        validation_result = await payman_service.validate_token(user)
+        validation_result = await payman_service.validate_token(user, db)
         if not validation_result.get("valid", False):
             user.payman_access_token = None
             user.token_expires_at = None
@@ -317,7 +318,7 @@ Please connect your Payman wallet first with /start command.
         await telegram_service.send_message(chat_id, message)
         return
     
-    validation_result = await payman_service.validate_token(user)
+    validation_result = await payman_service.validate_token(user, db)
     if not validation_result.get("valid", False):
         return await handle_token_error(chat_id, user, db, validation_result.get("error"))
     

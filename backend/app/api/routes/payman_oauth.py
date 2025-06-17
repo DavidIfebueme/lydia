@@ -66,7 +66,6 @@ async def oauth_connect_page(user_id: str):
             <div class="debug">
                 <p>Debug Info:</p>
                 <p>User ID: {user_id}</p>
-                <p>Client ID: {settings.PAYMAN_CLIENT_ID}</p>
                 <p>Redirect: {settings.PAYMAN_REDIRECT_URI}</p>
             </div>
         </div>

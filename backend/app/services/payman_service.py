@@ -1,6 +1,8 @@
 import httpx
 import re
+from datetime import timedelta
 from typing import Dict, Any, Optional
+from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 from app.config import settings
 from app.models.user import User
@@ -15,21 +17,15 @@ class PaymanService:
         """Generate Payman OAuth URL for user"""
         return f"{self.redirect_uri.replace('/callback', '/connect')}?user_id={telegram_user_id}"
 
-    async def validate_token(self, user: User) -> Dict[str, Any]:
+    async def validate_token(self, user: User, db: AsyncSession = None) -> Dict[str, Any]:
         """Validate if the user's token is still valid"""
-        if user.token_expires_at:
-            now = datetime.utcnow()
-            if hasattr(user.token_expires_at, 'tzinfo') and user.token_expires_at.tzinfo:
-                import pytz
-                now = pytz.UTC.localize(now)
+        if not user.payman_access_token:
+            return {
+                "valid": False,
+                "error": "NO_TOKEN",
+                "message": "No access token available"
+            }
             
-            if now >= user.token_expires_at:
-                return {
-                    "valid": False,
-                    "error": "TOKEN_EXPIRED", 
-                    "message": "Stored token has expired"
-                }
-        
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.post(
@@ -37,29 +33,22 @@ class PaymanService:
                     json={"accessToken": user.payman_access_token}
                 )
                 
-                if response.status_code == 401:
-                    return {
-                        "valid": False,
-                        "error": "TOKEN_EXPIRED",
-                        "message": "Token check failed with 401 Unauthorized"
-                    }
-                    
                 if response.status_code == 200:
+                    if db:
+                        user.token_expires_at = datetime.utcnow() + timedelta(hours=24)
+                        await db.commit()
                     return {"valid": True}
-
+                    
                 return {
                     "valid": False,
-                    "error": f"API_ERROR_{response.status_code}",
-                    "message": f"API responded with status {response.status_code}: {response.text[:100]}"
+                    "error": "TOKEN_INVALID", 
+                    "message": f"Token check failed with HTTP {response.status_code}"
                 }
                     
         except Exception as e:
-            return {
-                "valid": False, 
-                "error": "CONNECTION_ERROR",
-                "message": f"Network error checking token: {str(e)}"
-            }    
-        
+            print(f"🚨 Token validation error: {str(e)}")
+            return {"valid": True, "warning": f"Could not validate token: {str(e)}"}    
+           
     async def exchange_code_for_token(self, code: str) -> Dict[str, Any]:
         """Exchange OAuth code for access token"""
         try:
