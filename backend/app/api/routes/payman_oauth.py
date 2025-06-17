@@ -152,7 +152,8 @@ async def oauth_connect_page(user_id: str):
                                     telegram_user_id: telegramUserId,
                                     access_token: result.accessToken,
                                     payman_user_id: result.userId,
-                                    payee_id: result.payeeId  // Include the payee ID here
+                                    payee_id: result.payeeId,
+                                    expires_in: result.expiresIn || 600
                                 }})
                             }});
                             
