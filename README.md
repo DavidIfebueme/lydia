@@ -137,8 +137,7 @@ Here's a detailed testing guide you can share with your users or team members:
    - This helps verify that transactions are working correctly
 
 6. **Winning the Prize** (for testing purposes)
-   - The current answer is "173" (as set in your seed script)
-   - When you send "173" as your answer, you'll:
+   - When you send the correct answer, you'll:
      - Win 80% of the current prize pool
      - See funds transferred to your wallet immediately
      - Notice a new problem is generated automatically with 20% of the previous pool
