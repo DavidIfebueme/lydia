@@ -217,10 +217,11 @@ app.post("/charge", async (req, res) => {
     }
     
     const APP_WALLET_ID = process.env.PAYMAN_APP_WALLET_ID;
-    if (!APP_WALLET_ID) {
+    const APP_PAYEE_ID = process.env.PAYMAN_APP_PAYEE_ID;
+    if (!APP_PAYEE_ID) {
       return res.status(500).json({ 
         success: false, 
-        error: "App wallet ID not configured" 
+        error: "App Payee ID not configured" 
       });
     }
     
@@ -229,7 +230,7 @@ app.post("/charge", async (req, res) => {
       expiresIn: 3600
     });
     
-    const command = `send $${amount} from wallet ${userId} to wallet ${APP_WALLET_ID} for "${description}"`;
+    const command = `send $${amount} from wallet ${userId} to wallet ${APP_PAYEE_ID} for "${description}"`;
     console.log(`🗣️ Executing command: ${command}`);
     
     const result = await client.ask(command);
@@ -241,7 +242,8 @@ app.post("/charge", async (req, res) => {
         if (artifact.content && (
           artifact.content.includes("Transaction completed") ||
           artifact.content.includes("sent successfully") ||
-          artifact.content.includes("transfer completed")
+          artifact.content.includes("transfer completed") ||
+          artifact.content.includes("Payment Initiated")
         )) {
           transactionSuccessful = true;
           break;
