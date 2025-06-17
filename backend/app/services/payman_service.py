@@ -12,6 +12,7 @@ class PaymanService:
         self.payman_service_url = settings.PAYMAN_SERVICE_URL
         self.client_id = settings.PAYMAN_CLIENT_ID
         self.redirect_uri = settings.PAYMAN_REDIRECT_URI
+        self.app_wallet_id = settings.PAYMAN_APP_WALLET_ID
     
     def generate_oauth_url(self, telegram_user_id: str) -> str:
         """Generate Payman OAuth URL for user"""

@@ -165,6 +165,45 @@ app.post("/oauth/exchange", async (req, res) => {
   }
 });
 
+app.post("/balance", async (req, res) => {
+  try {
+    const { accessToken } = req.body;
+    console.log("🔄 Getting balance for user");
+    
+    if (!accessToken) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "Access token is required" 
+      });
+    }
+    
+    const client = PaymanClient.withToken(config.clientId, {
+      accessToken,
+      expiresIn: 3600
+    });
+    
+    const command = "List all my wallets and their balances";
+    console.log(`🗣️ Executing command: ${command}`);
+    
+    const result = await client.ask(command);
+    console.log("✅ Balance result:", result);
+    
+    res.json({ 
+      success: true, 
+      balance: result,
+      command
+    });
+    
+  } catch (error) {
+    console.error("Balance check failed:", error);
+    res.status(500).json({ 
+      success: false,
+      error: "Balance check failed", 
+      details: error.message 
+    });
+  }
+});
+
 app.post("/charge", async (req, res) => {
   try {
     const { accessToken, amount, description, userId } = req.body;
