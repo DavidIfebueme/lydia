@@ -1,6 +1,7 @@
 import httpx
 import re
 from typing import Dict, Any, Optional
+from datetime import datetime
 from app.config import settings
 
 class PaymanService:
@@ -12,7 +13,52 @@ class PaymanService:
     def generate_oauth_url(self, telegram_user_id: str) -> str:
         """Generate Payman OAuth URL for user"""
         return f"{self.redirect_uri.replace('/callback', '/connect')}?user_id={telegram_user_id}"
-    
+
+    async def validate_token(self, user: User) -> Dict[str, Any]:
+        """Validate if the user's token is still valid"""
+        if user.token_expires_at:
+            now = datetime.utcnow()
+            if hasattr(user.token_expires_at, 'tzinfo') and user.token_expires_at.tzinfo:
+                import pytz
+                now = pytz.UTC.localize(now)
+            
+            if now >= user.token_expires_at:
+                return {
+                    "valid": False,
+                    "error": "TOKEN_EXPIRED", 
+                    "message": "Stored token has expired"
+                }
+        
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.post(
+                    f"{self.payman_service_url}/balance",
+                    json={"accessToken": user.payman_access_token}
+                )
+                
+                if response.status_code == 401:
+                    return {
+                        "valid": False,
+                        "error": "TOKEN_EXPIRED",
+                        "message": "Token check failed with 401 Unauthorized"
+                    }
+                    
+                if response.status_code == 200:
+                    return {"valid": True}
+
+                return {
+                    "valid": False,
+                    "error": f"API_ERROR_{response.status_code}",
+                    "message": f"API responded with status {response.status_code}: {response.text[:100]}"
+                }
+                    
+        except Exception as e:
+            return {
+                "valid": False, 
+                "error": "CONNECTION_ERROR",
+                "message": f"Network error checking token: {str(e)}"
+            }    
+        
     async def exchange_code_for_token(self, code: str) -> Dict[str, Any]:
         """Exchange OAuth code for access token"""
         try:
@@ -44,13 +90,25 @@ class PaymanService:
                     }
                 )
                 
-                response_data = response.json()
+                if response.status_code == 401:
+                    return {"error": "TOKEN_EXPIRED", "details": "Access token has expired (HTTP 401)"}
+                    
+                try:
+                    response_data = response.json()
+                except Exception:
+                    return {
+                        "error": f"Invalid response (HTTP {response.status_code})", 
+                        "details": response.text[:100]
+                    }
                 
-                if response.status_code == 401 or "unauthorized" in str(response_data).lower() or "expired" in str(response_data).lower():
-                    return {"error": "TOKEN_EXPIRED", "details": "Access token has expired"}
+                if not response.status_code == 200 or "error" in response_data:
+                    return {
+                        "error": response_data.get("error", f"HTTP {response.status_code} error"),
+                        "details": response_data.get("details", response.text[:100])
+                    }
                 
                 return response_data
-                
+                    
         except Exception as e:
             return {"error": f"Network error during charge: {str(e)}"}
     

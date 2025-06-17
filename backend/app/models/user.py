@@ -12,5 +12,6 @@ class User(Base):
     payman_id = Column(String, unique=True, index=True)
     payman_payee_id = Column(String, nullable=True)
     payman_access_token = Column(String)
+    token_expires_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

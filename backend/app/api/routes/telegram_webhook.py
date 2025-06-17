@@ -60,6 +60,14 @@ async def handle_start_command(chat_id: int, user: User, db: AsyncSession, usern
         db.add(new_user)
         await db.commit()
         user = new_user
+
+    if user.payman_access_token:
+        validation_result = await payman_service.validate_token(user)
+        if not validation_result.get("valid", False):
+            user.payman_access_token = None
+            user.token_expires_at = None
+            await db.commit()
+            print(f"⚠️ Cleared invalid token for user {user_id}: {validation_result.get('message')}")        
     
     if not user.payman_access_token:
         connect_url = f"{settings.PAYMAN_REDIRECT_URI.replace('/callback', '/connect')}?user_id={user_id}"
@@ -67,7 +75,7 @@ async def handle_start_command(chat_id: int, user: User, db: AsyncSession, usern
         welcome_message = f"""
 🎯 <b>Welcome to Lydia!</b> 
 
-Hello {first_name}! I'm your AI puzzle master.
+Hello {first_name}! I'm your AI game master.
 
 To play, you need to connect your Payman wallet:
 
@@ -101,9 +109,14 @@ async def handle_balance_command(chat_id: int, user: User, db: AsyncSession = No
 
 Connect your wallet first with /start
         """
+        await telegram_service.send_message(chat_id, message)
+        return
     else:
         try:
             balance_data = await payman_service.get_balance(user.payman_access_token)
+            if balance_data.get('error') == 'TOKEN_EXPIRED' or (
+                isinstance(balance_data.get('details'), str) and '401' in balance_data.get('details')):
+                return await handle_token_error(chat_id, user, db)
             print(f"🔄 Checking wallet balance")
             print(f"✅ Balance check successful")
             print(f"Balance data: {balance_data}")
@@ -267,21 +280,16 @@ There's no active problem at the moment. One will be created when the first play
     )
     total_attempts = attempts_result.scalar_one()
 
-    # SIMPLIFY: Force both to be naive by removing timezone info completely
     now = datetime.utcnow()
     
-    # If problem.created_at has timezone info, remove it
     if hasattr(problem.created_at, 'tzinfo') and problem.created_at.tzinfo is not None:
-        # Convert to timestamp and back to remove timezone
         timestamp = problem.created_at.timestamp()
         problem_time = datetime.utcfromtimestamp(timestamp)
     else:
-        # Already timezone-naive
         problem_time = problem.created_at
     
-    # Now both are timezone-naive
     hours_elapsed = (now - problem_time).total_seconds() / 3600
-    current_cost = game_service.calculate_attempt_cost(problem_time)  # Pass timezone-naive time
+    current_cost = game_service.calculate_attempt_cost(problem_time)
     
     message = f"""
 🧩 <b>Current Problem</b> #{problem.id}
@@ -309,7 +317,14 @@ Please connect your Payman wallet first with /start command.
         await telegram_service.send_message(chat_id, message)
         return
     
+    validation_result = await payman_service.validate_token(user)
+    if not validation_result.get("valid", False):
+        return await handle_token_error(chat_id, user, db, validation_result.get("error"))
+    
     result = await game_service.process_attempt(user, text, db)
+
+    if "error" in result and "401" in str(result) or "unauthorized" in str(result).lower():
+        return await handle_token_error(chat_id, user, db)
 
     if result.get("token_expired"):
         message = f"""
@@ -376,3 +391,25 @@ Good luck!
         """
         await telegram_service.send_message(chat_id, message)
         return
+    
+
+async def handle_token_error(chat_id: int, user: User, db: AsyncSession, error_type: str = "TOKEN_EXPIRED"):
+    """Handle token errors consistently"""
+    user.payman_access_token = None
+    user.token_expires_at = None
+    await db.commit()
+    
+    connect_url = f"{settings.PAYMAN_REDIRECT_URI.replace('/callback', '/connect')}?user_id={user.telegram_id}"
+    
+    message = f"""
+⚠️ <b>Wallet Connection Error</b>
+
+Your Payman wallet connection has expired or is invalid.
+
+🔄 <b><a href="{connect_url}">Reconnect Your Wallet</a></b>
+
+This happens periodically for security reasons. After reconnecting, you'll be able to continue playing.
+    """
+    
+    await telegram_service.send_message(chat_id, message)
+    return {"token_expired": True}    

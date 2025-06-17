@@ -2,6 +2,7 @@ from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from datetime import datetime, timedelta
 from app.db import get_db
 from app.models.user import User
 from app.services.payman_service import payman_service
@@ -263,6 +264,9 @@ async def notify_success(request: Request, db: AsyncSession = Depends(get_db)):
         
         user.payman_access_token = access_token
         user.payman_payee_id = payee_id
+
+        expires_in = data.get("expires_in", 600)
+        user.token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
         await db.commit()
         
         print("🔄 Getting wallet ID via balance check...")
