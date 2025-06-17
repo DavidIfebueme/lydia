@@ -241,8 +241,8 @@ app.post("/charge", async (req, res) => {
       for (const artifact of result.artifacts) {
         if (artifact.content && (
           artifact.content.includes("Transaction completed") ||
-          artifact.content.includes("sent successfully") ||
-          artifact.content.includes("transfer completed") ||
+          artifact.content.includes("Memo") ||
+          artifact.content.includes("Payment Processed") ||
           artifact.content.includes("Payment Initiated")
         )) {
           transactionSuccessful = true;
@@ -307,9 +307,9 @@ app.post("/payout", async (req, res) => {
       for (const artifact of result.artifacts) {
         if (artifact.content && (
           artifact.content.includes("Transaction completed") ||
-          artifact.content.includes("sent successfully") ||
-          artifact.content.includes("transfer completed") ||
-          artifact.content.includes("Payment sent")
+          artifact.content.includes("Memo") ||
+          artifact.content.includes("Payment Processed") ||
+          artifact.content.includes("Payment Initiated")
         )) {
           transactionSuccessful = true;
           break;
