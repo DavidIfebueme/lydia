@@ -3,6 +3,7 @@ import re
 from typing import Dict, Any, Optional
 from datetime import datetime
 from app.config import settings
+from app.models.user import User
 
 class PaymanService:
     def __init__(self):
