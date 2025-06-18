@@ -65,3 +65,4 @@ Thumbs.db
 # Lock files (optional - some prefer to commit these)
 package-lock.json
 yarn.lock
+app-token.json

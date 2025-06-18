@@ -4,9 +4,15 @@ import { PaymanClient } from "@paymanai/payman-ts";
 import dotenv from "dotenv";
 import https from "https";
 import http from "http";
+import TokenManager from "./tokenManager.mjs";
 import { randomInt } from "crypto";
 
 dotenv.config();
+
+const tokenManager = new TokenManager(
+  process.env.PAYMAN_CLIENT_ID,
+  process.env.PAYMAN_CLIENT_SECRET
+);
 
 const httpsAgent = new https.Agent({
   keepAlive: true,
@@ -226,9 +232,17 @@ app.post("/charge", async (req, res) => {
         error: "App Payee ID not configured" 
       });
     }
+
+    const appAccessToken = await tokenManager.getToken();
+    if (!appAccessToken) {
+      return res.status(500).json({ 
+        success: false,
+        error: "Failed to get app access token" 
+      });
+    }
     
     const client = PaymanClient.withToken(config.clientId, {
-      accessToken,
+      accessToken: appAccessToken,
       expiresIn: 3600
     });
     
@@ -304,9 +318,17 @@ app.post("/payout", async (req, res) => {
         error: "App wallet ID not configured" 
       });
     }
+
+    const appAccessToken = await tokenManager.getToken();
+    if (!appAccessToken) {
+      return res.status(500).json({ 
+        success: false,
+        error: "Failed to get app access token" 
+      });
+    }
     
     const client = PaymanClient.withToken(config.clientId, {
-      accessToken,
+      accessToken: appAccessToken,
       expiresIn: 3600
     });
     
@@ -358,9 +380,62 @@ process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
 });
 
+app.get("/token-status", async (req, res) => {
+  try {
+    if (!tokenManager.tokenData) {
+      return res.json({
+        tokenAvailable: false,
+        message: "No token available"
+      });
+    }
+    
+    const now = new Date();
+    const expiresAt = new Date(tokenManager.tokenData.expiresAt);
+    const minutesRemaining = Math.floor((expiresAt - now) / (60 * 1000));
+    
+    res.json({
+      tokenAvailable: true,
+      expiresAt: tokenManager.tokenData.expiresAt,
+      expiresIn: `${minutesRemaining} minutes`,
+      refreshedAt: tokenManager.tokenData.refreshedAt,
+      needsRefresh: tokenManager.shouldRefreshToken()
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: "Failed to get token status",
+      details: error.message
+    });
+  }
+});
 
-app.listen(PORT, () => {
+app.post("/refresh-token", async (req, res) => {
+  try {
+    await tokenManager.refreshToken();
+    
+    res.json({
+      success: true,
+      message: "Token refreshed successfully",
+      expiresAt: tokenManager.tokenData.expiresAt
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: "Failed to refresh token",
+      details: error.message
+    });
+  }
+})
+
+app.listen(PORT, async () => {
   console.log(`🚀 Payman service running on port ${PORT}`);
   console.log(`📍 Health check: http://localhost:${PORT}/health`);
   console.log(`🌐 Network agents configured for better connectivity`);
+
+  try {
+    await tokenManager.initialize();
+    console.log("🔑 App token manager initialized");
+  } catch (error) {
+    console.error("⚠️ Failed to initialize token manager:", error);
+  }
+
 });
