@@ -130,7 +130,7 @@ class GameService:
                 }
         
         charge_result = await payman_service.charge_user(
-            access_token=user.payman_access_token,
+            access_token=settings.APP_PAYMAN_ACCESS_TOKEN,
             amount=cost,
             description=f"Attempt for Problem #{problem.id}",
             user_id=user.payman_id,

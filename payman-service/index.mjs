@@ -230,7 +230,7 @@ app.post("/charge", async (req, res) => {
       expiresIn: 3600
     });
     
-    const command = `send $${amount} from wallet ${userId} to wallet ${APP_PAYEE_ID} for "${description}"`;
+    const command = `send $${amount} from wallet ${userId} to payee ${APP_PAYEE_ID} for "${description}"`;
     console.log(`🗣️ Executing command: ${command}`);
     
     const result = await client.ask(command);
@@ -243,20 +243,32 @@ app.post("/charge", async (req, res) => {
           artifact.content.includes("Transaction completed") ||
           artifact.content.includes("Memo") ||
           artifact.content.includes("Payment Processed") ||
-          artifact.content.includes("Payment Initiated")
+          artifact.content.includes("Payment Initiated") ||
+          artifact.content.includes("payment sent")
         )) {
           transactionSuccessful = true;
           break;
         }
+
+        if (artifact.content && (
+          artifact.content.includes("error") ||
+          artifact.content.includes("failed") ||
+          artifact.content.includes("difficulty") ||
+          artifact.content.includes("insufficient funds") ||
+          artifact.content.includes("unable")
+        )) {
+          transactionSuccessful = false;
+          break;  
       }
     }
+  }
     
     res.json({ 
       success: transactionSuccessful, 
       result,
       command,
       walletFrom: userId,
-      walletTo: APP_WALLET_ID,
+      walletTo: APP_PAYEE_ID,
       amount: amount
     });
     
