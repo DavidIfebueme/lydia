@@ -1,6 +1,6 @@
 import hashlib
 import math
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
@@ -84,36 +84,55 @@ class GameService:
     
     async def create_new_problem(self, db: AsyncSession, rollover_amount: float = None) -> Problem:
         """Create a new problem with rollover from previous"""
-        problem_data = problem_bank.get_random_problem()
-        
-        new_problem = Problem(
-            question=problem_data["question"],
-            answer_hash=self.hash_answer(problem_data["answer"]),
-            is_active=True
-        )
-        db.add(new_problem)
-        await db.flush() 
-        
-        starting_amount = rollover_amount if rollover_amount else self.BASE_PRIZE_POOL
-        starting_amount_decimal = Decimal(str(starting_amount))
-        
-        new_prize_pool = PrizePool(
-            problem_id=new_problem.id,
-            pool_amount=starting_amount_decimal,
-            base_amount=starting_amount_decimal
-        )
-        db.add(new_prize_pool)
-        
-        await db.commit()
-        await db.refresh(new_problem)
-        
-        return new_problem
-    
+        try:
+            problem_data = problem_bank.get_random_problem()
+            
+            new_problem = Problem(
+                id=problem_data["id"],
+                question=problem_data["question"],
+                is_active=True,
+                created_at=datetime.now(timezone.utc)
+            )
+            db.add(new_problem)
+            
+            initial_amount = settings.INITIAL_PRIZE_POOL_AMOUNT
+            
+            pool = PrizePool(
+                problem_id=new_problem.id,
+                pool_amount=initial_amount,
+                base_amount=initial_amount,
+                created_at=datetime.now(timezone.utc)
+            )
+            
+            db.add(pool)
+            await db.commit()
+            await db.refresh(new_problem)
+            
+            return {
+                "success": True,
+                "problem": {
+                    "id": new_problem.id,
+                    "question": new_problem.question
+                }
+            }
+            
+        except Exception as e:
+            print(f"Error creating problem: {str(e)}")
+            await db.rollback()
+            return {
+                "success": False,
+                "error": f"Failed to create problem: {str(e)}"
+            }
+
     async def process_attempt(self, user: User, guess: str, db: AsyncSession) -> dict:
         """Process a user's guess attempt"""
         problem = await self.get_current_problem(db)
         if not problem:
             problem = await self.create_new_problem(db)
+
+        normalized_guess = guess.lower().strip()
+        
+        is_correct = problem_bank.verify_answer(problem.id, normalized_guess)    
         
         cost = self.calculate_attempt_cost(problem.created_at)
 
@@ -211,7 +230,6 @@ class GameService:
         winner_payout = round(current_pool_decimal * winner_ratio_decimal, 2)
         rollover_amount = round(current_pool_decimal * rollover_ratio_decimal, 2)
         
-        # Convert back to float for API responses
         winner_payout_float = float(winner_payout)
         rollover_amount_float = float(rollover_amount)
 
