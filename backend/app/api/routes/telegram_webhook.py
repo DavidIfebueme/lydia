@@ -10,7 +10,7 @@ from app.models.problem import Problem
 from app.models.prize_pool import PrizePool
 from app.config import settings
 from sqlalchemy import select, func
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import re
 
@@ -123,10 +123,10 @@ Use /problem to see the current challenge.
             return
         
         leaderboard_lines = ["🏆 <b>Top Winners</b>\n"]
-        
+
         for i, (user, wins, total_won) in enumerate(winners, 1):
-            username = f"@{user.username}" if user.username else f"User {user.telegram_id[:5]}..."
-            leaderboard_lines.append(f"{i}. {username}: {wins} wins, ${float(total_won):.2f} total")
+            user_display = f"User {user.telegram_id[:5]}..."
+            leaderboard_lines.append(f"{i}. {user_display}: {wins} wins, ${float(total_won):.2f} total")
         
         message = "\n".join(leaderboard_lines)
         message += "\n\nUse /problem to see the current challenge!"
@@ -163,8 +163,14 @@ async def handle_stats_command(chat_id: int, db: AsyncSession):
         
         if current_problem:
             current_pool = await game_service.get_current_prize_pool(current_problem.id, db)
-            now = datetime.utcnow()
-            hours_elapsed = (now - current_problem.created_at).total_seconds() / 3600
+            now = datetime.utcnow().replace(tzinfo=timezone.utc)
+            problem_created = current_problem.created_at
+            
+            if problem_created.tzinfo is None:
+                problem_created = problem_created.replace(tzinfo=timezone.utc)
+            
+            hours_elapsed = (now - problem_created).total_seconds() / 3600
+            current_cost = game_service.calculate_attempt_cost(problem_created)
         
         message = f"""
 📊 <b>Game Statistics</b>
@@ -177,7 +183,7 @@ async def handle_stats_command(chat_id: int, db: AsyncSession):
 🧩 <b>Current Problem</b>
 • Prize Pool: ${float(current_pool):.2f}
 • Running for: {hours_elapsed:.1f} hours
-• Current Cost: ${game_service.calculate_attempt_cost(current_problem.created_at):.2f}
+• Current Cost: ${current_cost:.2f}
 
 Use /problem to see the challenge!
         """
