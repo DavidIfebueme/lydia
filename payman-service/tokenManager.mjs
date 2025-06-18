@@ -96,15 +96,28 @@ class TokenManager {
     console.log("🔄 Refreshing app access token...");
     
     try {
-      const client = PaymanClient.withClientCredentials({
-        clientId: this.clientId,
-        clientSecret: this.clientSecret
+      const tokenUrl = "https://agent.payman.ai/api/oauth/token";
+      const response = await fetch(tokenUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          grant_type: "client_credentials",
+          client_id: this.clientId,
+          client_secret: this.clientSecret
+        })
       });
       
-      const tokenResponse = await client.getAccessToken();
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Token request failed: ${response.status} ${errorText}`);
+      }
       
-      if (!tokenResponse?.accessToken) {
-        throw new Error("Failed to get access token");
+      const tokenResponse = await response.json();
+      
+      if (!tokenResponse?.access_token) {
+        throw new Error("Token response missing access_token");
       }
       
       const expiresIn = tokenResponse.expiresIn || 3600;
