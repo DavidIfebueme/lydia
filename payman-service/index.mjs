@@ -211,7 +211,7 @@ app.post("/charge", async (req, res) => {
     const { accessToken, amount, description, userId } = req.body;
     console.log(`🔄 Attempting to charge $${amount} from wallet ${userId}`);
     
-    if (!accessToken || !amount || !userId) {
+    if (!amount || !userId) {
       return res.status(400).json({ 
         success: false, 
         error: "Missing required fields: accessToken, amount, userId" 
