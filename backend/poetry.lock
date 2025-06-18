@@ -779,6 +779,16 @@ anyio = ">=3.6.2,<5"
 full = ["httpx (>=0.27.0,<0.29.0)", "itsdangerous", "jinja2", "python-multipart (>=0.0.18)", "pyyaml"]
 
 [[package]]
+name = "telegram"
+version = "0.0.1"
+description = "Telegram APIs"
+optional = false
+python-versions = "*"
+files = [
+    {file = "telegram-0.0.1.tar.gz", hash = "sha256:d405a0af4c868a8dbeae6d03e297e21c7ee6269e11e2ed3810e15544aba02591"},
+]
+
+[[package]]
 name = "typing-extensions"
 version = "4.14.0"
 description = "Backported and Experimental Type Hints for Python 3.9+"
@@ -824,4 +834,4 @@ standard = ["colorama (>=0.4)", "httptools (>=0.6.3)", "python-dotenv (>=0.13)",
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.12"
-content-hash = "65afd3909a6c2fb46b2c39029fee05555f93a4f668bf76ea19fefef46d771b0b"
+content-hash = "72a06747c44116033778f7f1fda45dce716994049b36623255054476081f3b3c"

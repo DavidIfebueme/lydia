@@ -18,6 +18,7 @@ psycopg2-binary = "^2.9.10"
 python-telegram-bot = "^22.1"
 httpx = "^0.28.1"
 pytz = "^2025.2"
+telegram = "^0.0.1"
 
 
 [tool.poetry.group.dev.dependencies]

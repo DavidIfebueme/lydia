@@ -6,6 +6,8 @@ from app.services.payman_service import payman_service
 from app.services.game_service import game_service
 from app.models.user import User
 from app.models.attempt import Attempt
+from app.models.problem import Problem
+from app.models.prize_pool import PrizePool
 from app.config import settings
 from sqlalchemy import select, func
 from datetime import datetime, timedelta
@@ -19,6 +21,11 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
     """Handle incoming Telegram updates"""
     try:
         update = await request.json()
+
+        if 'callback_query' in update:
+            await handle_callback_query(update['callback_query'], db)
+            return {"status": "ok"}
+        
         parsed_message = telegram_service.parse_message(update)
         
         if not parsed_message:
@@ -41,6 +48,8 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             await handle_problem_command(chat_id, user, db)
         elif text.startswith("/balance"):
             await handle_balance_command(chat_id, user, db)
+        elif text.startswith("/menu") or text.startswith("/commands"):
+            await handle_menu_command(chat_id)
         else:
             await handle_guess_attempt(chat_id, user, text, db)
         
@@ -50,6 +59,136 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         print(f"Error processing webhook: {e}")
         return {"status": "error"}
     
+async def handle_menu_command(chat_id: int):
+    """Display available commands as buttons"""
+    await telegram_service.send_commands_menu(chat_id)
+
+
+async def handle_callback_query(callback_query: dict, db: AsyncSession):
+    """Handle callback queries from inline keyboards"""
+    callback_id = callback_query['id']
+    chat_id = callback_query['message']['chat']['id']
+    user_id = callback_query['from']['id']
+    data = callback_query['data']
+    
+    result = await db.execute(select(User).where(User.telegram_id == str(user_id)))
+    user = result.scalar_one_or_none()
+    
+    if data == "cmd_problem":
+        await handle_problem_command(chat_id, user, db)
+    elif data == "cmd_balance":
+        await handle_balance_command(chat_id, user, db)
+    elif data == "cmd_leaderboard":
+        await handle_leaderboard_command(chat_id, db)
+    elif data == "cmd_help":
+        await handle_help_command(chat_id)
+    elif data == "cmd_start":
+        username = callback_query['from'].get('username', '')
+        first_name = callback_query['from'].get('first_name', '')
+        await handle_start_command(chat_id, user, db, username, first_name, user_id)
+    elif data == "cmd_stats":
+        await handle_stats_command(chat_id, db)
+    
+    await telegram_service.answer_callback_query(callback_id)
+
+
+async def handle_leaderboard_command(chat_id: int, db: AsyncSession):
+    """Show leaderboard of top winners"""
+    try:
+        winner_query = select(
+            User,
+            func.count(PrizePool.id).label('wins'),
+            func.sum(PrizePool.pool_amount * 0.8).label('total_won')
+        ).join(
+            PrizePool,
+            User.id == PrizePool.winner_user_id
+        ).group_by(
+            User.id
+        ).order_by(
+            func.count(PrizePool.id).desc()
+        ).limit(10)
+        
+        winners_result = await db.execute(winner_query)
+        winners = winners_result.all()
+        
+        if not winners:
+            message = """
+🏆 <b>Leaderboard</b>
+
+No winners yet! Be the first to solve a problem.
+
+Use /problem to see the current challenge.
+            """
+            await telegram_service.send_message(chat_id, message)
+            return
+        
+        leaderboard_lines = ["🏆 <b>Top Winners</b>\n"]
+        
+        for i, (user, wins, total_won) in enumerate(winners, 1):
+            username = f"@{user.username}" if user.username else f"User {user.telegram_id[:5]}..."
+            leaderboard_lines.append(f"{i}. {username}: {wins} wins, ${float(total_won):.2f} total")
+        
+        message = "\n".join(leaderboard_lines)
+        message += "\n\nUse /problem to see the current challenge!"
+        
+        await telegram_service.send_message(chat_id, message)
+    
+    except Exception as e:
+        print(f"Error in leaderboard: {e}")
+        message = "❌ Error fetching leaderboard. Please try again later."
+        await telegram_service.send_message(chat_id, message)
+
+async def handle_stats_command(chat_id: int, db: AsyncSession):
+    """Show game statistics"""
+    try:
+        problem_count = await db.execute(select(func.count(Problem.id)))
+        total_problems = problem_count.scalar_one()
+        
+        attempt_count = await db.execute(select(func.count(Attempt.id)))
+        total_attempts = attempt_count.scalar_one()
+        
+        winner_count = await db.execute(
+            select(func.count(PrizePool.id)).where(PrizePool.winner_user_id.isnot(None))
+        )
+        solved_problems = winner_count.scalar_one()
+        
+        total_paid_query = await db.execute(
+            select(func.sum(PrizePool.pool_amount * 0.8)).where(PrizePool.paid_out == True)
+        )
+        total_paid = total_paid_query.scalar_one() or 0
+        
+        current_problem = await game_service.get_current_problem(db)
+        current_pool = 0
+        hours_elapsed = 0
+        
+        if current_problem:
+            current_pool = await game_service.get_current_prize_pool(current_problem.id, db)
+            now = datetime.utcnow()
+            hours_elapsed = (now - current_problem.created_at).total_seconds() / 3600
+        
+        message = f"""
+📊 <b>Game Statistics</b>
+
+• Problems Created: {total_problems}
+• Problems Solved: {solved_problems}
+• Total Attempts: {total_attempts}
+• Total Prizes Paid: ${float(total_paid):.2f}
+
+🧩 <b>Current Problem</b>
+• Prize Pool: ${float(current_pool):.2f}
+• Running for: {hours_elapsed:.1f} hours
+• Current Cost: ${game_service.calculate_attempt_cost(current_problem.created_at):.2f}
+
+Use /problem to see the challenge!
+        """
+        
+        await telegram_service.send_message(chat_id, message)
+    
+    except Exception as e:
+        print(f"Error in stats: {e}")
+        message = "❌ Error fetching statistics. Please try again later."
+        await telegram_service.send_message(chat_id, message)    
+
 async def handle_start_command(chat_id: int, user: User, db: AsyncSession, username: str, first_name: str, user_id: int):
     """Handle /start command"""
     if not user:
@@ -100,6 +239,7 @@ Type /balance to check your wallet.
         """
     
     await telegram_service.send_message(chat_id, welcome_message)
+    await telegram_service.send_commands_menu(chat_id)
 
 
 async def handle_balance_command(chat_id: int, user: User, db: AsyncSession = None):

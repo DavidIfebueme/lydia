@@ -45,5 +45,49 @@ class TelegramService:
             "text": message.get("text", ""),
             "message_id": message["message_id"]
         }
+    
+    async def send_commands_menu(self, chat_id: int):
+        """Send a menu of available commands as inline buttons"""
+        keyboard = [
+            [
+                {"text": "🧩 Current Problem", "callback_data": "cmd_problem"},
+                {"text": "💰 Check Balance", "callback_data": "cmd_balance"}
+            ],
+            [
+                {"text": "🏆 Leaderboard", "callback_data": "cmd_leaderboard"},
+                {"text": "ℹ️ Help", "callback_data": "cmd_help"}
+            ],
+            [
+                {"text": "🔄 Connect Wallet", "callback_data": "cmd_start"},
+                {"text": "📊 Stats", "callback_data": "cmd_stats"}
+            ]
+        ]
+        
+        reply_markup = {
+            "inline_keyboard": keyboard
+        }
+        
+        message = """
+📋 <b>Lydia Bot Commands</b>
+
+Click a button to execute a command:
+        """
+        
+        return await self.send_message(chat_id, message, reply_markup)
+    
+    async def answer_callback_query(self, callback_query_id: str, text: str = None, show_alert: bool = False):
+        """Answer a callback query to remove the loading indicator"""
+        url = f"{self.base_url}/answerCallbackQuery"
+        payload = {"callback_query_id": callback_query_id}
+        
+        if text:
+            payload["text"] = text
+        
+        if show_alert:
+            payload["show_alert"] = show_alert
+            
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload)
+            return response.json()
 
 telegram_service = TelegramService()

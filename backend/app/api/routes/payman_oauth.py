@@ -326,6 +326,7 @@ You can now:
 Type /problem to see the current challenge!
                 """
             )
+            await telegram_service.send_commands_menu(int(telegram_user_id))
             
             return {"success": True, "wallet_id": wallet_id}
         else:
