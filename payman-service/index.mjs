@@ -97,7 +97,9 @@ app.post("/oauth/exchange", async (req, res) => {
     console.log("✅ Token exchange successful");
     console.log("Access token length:", tokenResponse.accessToken?.length || 0);
 
-    const payeeName = `Test Payee ${Date.now()}`;
+    const userId = tokenResponse.paymanUserId || tokenResponse.payman_user_id || "unknown";
+    const userSuffix = userId.slice(-4);
+    const payeeName = `U${userSuffix}`
     console.log("🔄 Creating test payee with name:", payeeName);
 
     let payeeId = null;
