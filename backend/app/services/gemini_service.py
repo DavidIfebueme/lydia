@@ -22,7 +22,7 @@ class AIGuardianService:
     def __init__(self):
         genai.configure(api_key=settings.GEMINI_API_KEY)
 
-        self.model = genai.GenerativeModel('gemini-1.5-flash') 
+        self.model = genai.GenerativeModel('gemini-2.0-flash') 
         
         self.system_prompt = """
         You are the AI Guardian of the Prize Pool in the Lydia puzzle game.
@@ -182,23 +182,28 @@ class AIGuardianService:
                     
                     history = await self.get_conversation_history(user_id, db)
                     
-                    conversation_history = []
-                    for msg in history:
-                        if msg["role"] == "user":
-                            conversation_history.append({"role": "user", "parts": [{"text": msg["content"]}]})
-                        elif msg["role"] == "assistant":
-                            conversation_history.append({"role": "model", "parts": [{"text": msg["content"]}]})
+                    all_messages = []
+                    if len(history) > 0:
+                        first_message = history[0]
+                        if first_message["role"] == "user":
+                            all_messages.append(f"{self.system_prompt}\n\nUser: {first_message['content']}")
+                        
+                        for i in range(1, len(history)):
+                            msg = history[i]
+                            if msg["role"] == "user":
+                                all_messages.append(f"User: {msg['content']}")
+                            elif msg["role"] == "assistant":
+                                all_messages.append(f"AI Guardian: {msg['content']}")
+                    else:
+                        all_messages.append(f"{self.system_prompt}\n\nUser: {message}")
                     
-                    chat_session = self.model.start_chat(
-                        history=conversation_history,
-                        system_instruction=self.system_prompt
-                    )
-
-                    response = chat_session.send_message(message)
+                    combined_prompt = "\n\n".join(all_messages)
+                    
+                    response = self.model.generate_content(combined_prompt)
                     ai_message = response.text
-                    
+
                     await self.add_to_conversation(user_id, "assistant", ai_message, db)
-                    
+
                     transfer_detected = self.check_for_transfer_attempt(ai_message)
                     
                     return {
@@ -206,6 +211,7 @@ class AIGuardianService:
                         "message": ai_message,
                         "transfer_detected": transfer_detected
                     }
+                
                 except Exception as e:
                     print(f"Database error in process_message: {str(e)}")
                     raise
