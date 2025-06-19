@@ -12,6 +12,7 @@ from app.models.user import User
 from app.models.prize_pool import PrizePool
 from app.services.payman_service import payman_service
 from app.services.problem_bank_service import problem_bank
+from app.services.gemini_service import ai_guardian_service
 
 class GameService:
     def __init__(self):
@@ -136,99 +137,179 @@ class GameService:
 
     async def process_attempt(self, user: User, guess: str, db: AsyncSession) -> dict:
         """Process a user's guess attempt"""
-        problem = await self.get_current_problem(db)
-        if not problem:
-            problem = await self.create_new_problem(db)
 
-        normalized_guess = guess.lower().strip()
-        
-        is_correct = problem_bank.verify_answer(problem.id, normalized_guess)    
-        
-        cost = self.calculate_attempt_cost(problem.created_at)
-
-        if not user.payman_id or not user.payman_id.startswith("wlt-"):
-            balance_data = await payman_service.get_balance(user.payman_access_token)
-            if balance_data.get("success") and balance_data.get("wallet_id"):
-                user.payman_id = balance_data.get("wallet_id")
+        try:
+            problem = await self.get_current_problem(db)
+            if not problem:
+                return {"error": "No active problem found"}
+            
+            if problem.id == 100:
+                response = await ai_guardian_service.process_message(user.telegram_id, guess)
+                
+                cost = self.calculate_attempt_cost(problem.created_at)
+                charge_result = await payman_service.charge_wallet(
+                    access_token=user.payman_access_token,
+                    wallet_id=user.payman_id,
+                    amount=cost,
+                    description=f"AI Guardian Challenge Attempt"
+                )
+                
+                if not charge_result.get("success"):
+                    return {
+                        "error": f"Failed to charge wallet: {charge_result.get('error', 'Unknown error')}"
+                    }
+                    
+                print(f"✅ Charge successful: ${cost} from wallet {user.payman_id}")
+                
+                # Record the attempt
+                attempt = Attempt(
+                    user_id=user.id,
+                    problem_id=problem.id,
+                    guess=guess,
+                    is_correct=response.get("transfer_detected", False),
+                    amount_charged=cost
+                )
+                
+                db.add(attempt)
+                
+                current_pool = await self.get_current_prize_pool(problem.id, db)
+                result = await db.execute(
+                    select(PrizePool).where(PrizePool.problem_id == problem.id)
+                )
+                prize_pool = result.scalar_one_or_none()
+                
+                if prize_pool:
+                    prize_pool.pool_amount = current_pool + cost
+                    
                 await db.commit()
-                print(f"✅ Updated missing wallet ID: {user.payman_id}")
-            else:
+                
+                if response.get("transfer_detected", False):
+                    win_result = await self.handle_winner(
+                        user=user,
+                        problem=problem,
+                        attempt=attempt,
+                        db=db
+                    )
+                    
+                    if win_result.get("success"):
+                        response["is_correct"] = True
+                        response["is_winner"] = True
+                        response["cost"] = float(cost)
+                        response["current_pool"] = float(current_pool + cost)
+                        response["hours_elapsed"] = self.calculate_hours_elapsed(problem.created_at)
+                        response["winning_message"] = guess
+                        response["winner_payout"] = win_result.get("winner_payout")
+                        response["total_pool"] = win_result.get("total_pool")
+                        response["rollover_amount"] = win_result.get("rollover_amount")
+                        response["payout_result"] = win_result.get("payout_result", {})
+                        response["new_problem"] = win_result.get("new_problem", {})
+                        return response
+                
+                # Return normal response for unsuccessful attempts
                 return {
-                    "error": "Your wallet connection doesn't have a valid wallet ID. Please use /start to reconnect.",
-                    "wallet_id_missing": True
+                    "success": True,
+                    "is_correct": False,
+                    "message": response.get("message"),
+                    "cost": float(cost),
+                    "current_pool": float(current_pool + cost),
+                    "hours_elapsed": self.calculate_hours_elapsed(problem.created_at)
                 }
-        
-        charge_result = await payman_service.charge_user(
-            access_token=settings.APP_PAYMAN_ACCESS_TOKEN,
-            amount=cost,
-            description=f"Attempt for Problem #{problem.id}",
-            user_id=user.payman_id,
-        )
-        
-        if charge_result.get("error") == "TOKEN_EXPIRED":
-            user.payman_access_token = None
-            user.payman_id = None
+            
+
+            normalized_guess = guess.lower().strip()
+            
+            is_correct = problem_bank.verify_answer(problem.id, normalized_guess)    
+            
+            cost = self.calculate_attempt_cost(problem.created_at)
+
+            if not user.payman_id or not user.payman_id.startswith("wlt-"):
+                balance_data = await payman_service.get_balance(user.payman_access_token)
+                if balance_data.get("success") and balance_data.get("wallet_id"):
+                    user.payman_id = balance_data.get("wallet_id")
+                    await db.commit()
+                    print(f"✅ Updated missing wallet ID: {user.payman_id}")
+                else:
+                    return {
+                        "error": "Your wallet connection doesn't have a valid wallet ID. Please use /start to reconnect.",
+                        "wallet_id_missing": True
+                    }
+            
+            charge_result = await payman_service.charge_user(
+                access_token=settings.APP_PAYMAN_ACCESS_TOKEN,
+                amount=cost,
+                description=f"Attempt for Problem #{problem.id}",
+                user_id=user.payman_id,
+            )
+            
+            if charge_result.get("error") == "TOKEN_EXPIRED":
+                user.payman_access_token = None
+                user.payman_id = None
+                await db.commit()
+                
+                return {
+                    "error": "🔄 Your wallet connection has expired. Please use /start to reconnect your Payman wallet.",
+                    "token_expired": True
+                }
+            
+            if not charge_result.get("success"):
+                return {"error": f"💳 Payment failed: {charge_result.get('error', 'Unknown error')}"}
+            
+            is_correct = self.check_answer(guess, problem.answer_hash)
+            
+            attempt = Attempt(
+                user_id=user.id,
+                problem_id=problem.id,
+                guess=guess,
+                is_correct=is_correct,
+                amount_charged=cost
+            )
+            db.add(attempt)
+            
+            result = await db.execute(
+                select(PrizePool).where(PrizePool.problem_id == problem.id)
+            )
+            prize_pool = result.scalar_one_or_none()
+            if prize_pool:
+                prize_pool.pool_amount += Decimal(str(cost))
+            else:
+                new_pool = PrizePool(
+                    problem_id=problem.id,
+                    pool_amount=Decimal(str(cost)) + Decimal(str(self.BASE_PRIZE_POOL)), 
+                    base_amount=Decimal(str(self.BASE_PRIZE_POOL))
+                )
+                db.add(new_pool)
+            
             await db.commit()
             
-            return {
-                "error": "🔄 Your wallet connection has expired. Please use /start to reconnect your Payman wallet.",
-                "token_expired": True
-            }
-        
-        if not charge_result.get("success"):
-            return {"error": f"💳 Payment failed: {charge_result.get('error', 'Unknown error')}"}
-        
-        is_correct = self.check_answer(guess, problem.answer_hash)
-        
-        attempt = Attempt(
-            user_id=user.id,
-            problem_id=problem.id,
-            guess=guess,
-            is_correct=is_correct,
-            amount_charged=cost
-        )
-        db.add(attempt)
-        
-        result = await db.execute(
-            select(PrizePool).where(PrizePool.problem_id == problem.id)
-        )
-        prize_pool = result.scalar_one_or_none()
-        if prize_pool:
-            prize_pool.pool_amount += Decimal(str(cost))
-        else:
-            new_pool = PrizePool(
-                problem_id=problem.id,
-                pool_amount=Decimal(str(cost)) + Decimal(str(self.BASE_PRIZE_POOL)), 
-                base_amount=Decimal(str(self.BASE_PRIZE_POOL))
-            )
-            db.add(new_pool)
-        
-        await db.commit()
-        
-        if is_correct:
-            return await self.handle_winner(user, problem, attempt, db)
-        else:
-            current_pool = await self.get_current_prize_pool(problem.id, db)
-            
-            now = datetime.utcnow()
-            
-            if hasattr(problem.created_at, 'tzinfo') and problem.created_at.tzinfo is not None:
-                timestamp = problem.created_at.timestamp()
-                problem_time = datetime.utcfromtimestamp(timestamp)
+            if is_correct:
+                return await self.handle_winner(user, problem, attempt, db)
             else:
-                problem_time = problem.created_at
+                current_pool = await self.get_current_prize_pool(problem.id, db)
+                
+                now = datetime.utcnow()
+                
+                if hasattr(problem.created_at, 'tzinfo') and problem.created_at.tzinfo is not None:
+                    timestamp = problem.created_at.timestamp()
+                    problem_time = datetime.utcfromtimestamp(timestamp)
+                else:
+                    problem_time = problem.created_at
 
-            hours_elapsed = (now - problem_time).total_seconds() / 3600
+                hours_elapsed = (now - problem_time).total_seconds() / 3600
+                
+                return {
+                    "success": True,
+                    "is_correct": False,
+                    "cost": cost,
+                    "attempt_id": attempt.id,
+                    "current_pool": current_pool,
+                    "hours_elapsed": hours_elapsed
+                }
             
-            return {
-                "success": True,
-                "is_correct": False,
-                "cost": cost,
-                "attempt_id": attempt.id,
-                "current_pool": current_pool,
-                "hours_elapsed": hours_elapsed
-            }
-    
+        except Exception as e:
+            print(f"Error processing attempt: {str(e)}")
+            return {"error": f"Error processing attempt: {str(e)}"}
+
+
     async def handle_winner(self, user: User, problem: Problem, attempt: Attempt, db: AsyncSession) -> dict:
         """Handle winner: payout 80%, rollover 20%, start new game"""
         try:

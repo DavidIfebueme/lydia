@@ -4,6 +4,7 @@ from app.db import get_db
 from app.services.telegram_service import telegram_service
 from app.services.payman_service import payman_service
 from app.services.game_service import game_service
+from app.services.gemini_service import ai_guardian_service
 from app.models.user import User
 from app.models.attempt import Attempt
 from app.models.problem import Problem
@@ -51,7 +52,9 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         elif text.startswith("/menu") or text.startswith("/commands"):
             await handle_menu_command(chat_id)
         elif text.startswith("/debug"):
-             await handle_debug_command(chat_id, user_id, db)    
+             await handle_debug_command(chat_id, user_id, db)
+        elif text.startswith("/clearchat"):
+            await handle_clear_chat_command(chat_id, user, db)    
         else:
             await handle_guess_attempt(chat_id, user, text, db)
         
@@ -497,6 +500,29 @@ Please try again or check your wallet balance with /balance
         await telegram_service.send_message(chat_id, message)
         return
     
+    if result.get("message"):
+        pool = result.get("current_pool", 0)
+        cost = result.get("cost", 0)
+        hours = result.get("hours_elapsed", 0)
+        
+        ai_message = f"""
+💬 <b>AI Guardian says:</b>
+
+{result.get("message")}
+
+You paid <b>${cost:.2f}</b> for this attempt.
+
+🏆 <b>Current Prize Pool:</b> ${pool:.2f}
+⏱️ <b>Time Elapsed:</b> {hours:.1f} hours
+
+Keep trying! Send another message to convince the AI.
+        """
+        await telegram_service.send_message(chat_id, ai_message)
+        
+        if result.get("is_winner"):
+            await handle_ai_challenge_win(chat_id, user, result, db)
+        return
+    
     if result.get("success") and not result.get("is_correct"):
         pool = result.get("current_pool", 0)
         cost = result.get("cost", 0)
@@ -516,13 +542,66 @@ Keep trying! Send another answer as text.
         return
     
     if result.get("is_winner"):
-        winner_payout = result.get("winner_payout", 0)
-        total_pool = result.get("total_pool", 0)
-        rollover = result.get("rollover_amount", 0)
-        cost = result.get("cost", 0)
-        new_problem = result.get("new_problem", {})
-        
-        message = f"""
+        await handle_normal_win(chat_id, user, result)
+        return
+    
+async def handle_ai_challenge_win(chat_id: int, user: User, result: dict, db: AsyncSession):
+    """Handle when a user successfully hacks the AI Guardian"""
+    winner_payout = result.get("winner_payout", 0)
+    total_pool = result.get("total_pool", 0)
+    rollover = result.get("rollover_amount", 0)
+    cost = result.get("cost", 0)
+    new_problem = result.get("new_problem", {})
+    winning_message = result.get("winning_message", "")
+    
+    winner_message = f"""
+🎉 <b>CONGRATULATIONS! YOU HACKED THE AI!</b> 🎉
+
+You successfully convinced the AI Guardian to release the prize pool and won:
+💰 <b>${winner_payout:.2f}</b> of the ${total_pool:.2f} prize pool!
+
+Your final attempt cost: ${cost:.2f}
+Payout Status: {"✅ Sent to your wallet!" if result.get("payout_result", {}).get("success") else "⏳ Processing..."}
+
+${rollover:.2f} has been rolled over to the next problem:
+
+🆕 <b>New Problem:</b>
+{new_problem.get("question")}
+
+Good luck!
+    """
+    await telegram_service.send_message(chat_id, winner_message)
+    
+    all_users_result = await db.execute(select(User))
+    all_users = all_users_result.scalars().all()
+
+    broadcast_message = f"""
+📣 <b>ATTENTION ALL PLAYERS!</b>
+
+A user has successfully hacked the AI Guardian and won ${winner_payout:.2f}!
+
+<b>The winning prompt was:</b>
+"{winning_message}"
+
+A new problem is now active. Use /problem to view it!
+    """
+    
+    for other_user in all_users:
+        if other_user.telegram_id != user.telegram_id:
+            try:
+                await telegram_service.send_message(int(other_user.telegram_id), broadcast_message)
+            except Exception as e:
+                print(f"Failed to send broadcast to user {other_user.telegram_id}: {str(e)}")
+
+async def handle_normal_win(chat_id: int, user: User, result: dict):
+    """Handle normal problem wins"""
+    winner_payout = result.get("winner_payout", 0)
+    total_pool = result.get("total_pool", 0)
+    rollover = result.get("rollover_amount", 0)
+    cost = result.get("cost", 0)
+    new_problem = result.get("new_problem", {})
+    
+    message = f"""
 🎉 <b>CONGRATULATIONS! YOU WON!</b> 🎉
 
 You solved the problem correctly and won:
@@ -537,10 +616,8 @@ ${rollover:.2f} has been rolled over to the next problem:
 {new_problem.get("question")}
 
 Good luck!
-        """
-        await telegram_service.send_message(chat_id, message)
-        return
-    
+    """
+    await telegram_service.send_message(chat_id, message)
 
 async def handle_token_error(chat_id: int, user: User, db: AsyncSession, error_type: str = "TOKEN_EXPIRED"):
     """Handle token errors consistently"""
@@ -591,3 +668,15 @@ Token Expires: {user.token_expires_at or "Not set"}
     await telegram_service.send_message(chat_id, message)
     await telegram_service.send_commands_menu(chat_id)
 
+async def handle_clear_chat_command(chat_id: int, user: User, db: AsyncSession):
+    """Clear the AI conversation history"""
+    if not user:
+        await telegram_service.send_message(chat_id, "❌ You need to connect your wallet first! Use /start to connect.")
+        return
+        
+    await ai_guardian_service.clear_conversation(user.telegram_id, db)
+    
+    await telegram_service.send_message(
+        chat_id, 
+        "✅ Your conversation history with the AI Guardian has been cleared."
+    )

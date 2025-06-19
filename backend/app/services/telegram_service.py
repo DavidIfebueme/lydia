@@ -1,6 +1,9 @@
 import httpx
 from typing import Dict, Any
+from sqlalchemy import select
 from app.config import settings
+from app.models.user import User
+from app.db import get_db
 
 class TelegramService:
     def __init__(self):
@@ -89,5 +92,25 @@ Click a button to execute a command:
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload)
             return response.json()
+
+    async def broadcast_message(self, message: str, exclude_user_id: str = None):
+        """Broadcast a message to all users except the excluded one"""  
+        
+        async for db in get_db():
+            try:
+                result = await db.execute(select(User))
+                all_users = result.scalars().all()
+                
+                for user in all_users:
+                    if exclude_user_id and user.telegram_id == exclude_user_id:
+                        continue
+                        
+                    try:
+                        await self.send_message(int(user.telegram_id), message)
+                    except Exception as e:
+                        print(f"Failed to send broadcast to user {user.telegram_id}: {str(e)}")
+                        
+            except Exception as e:
+                print(f"Error broadcasting message: {str(e)}")    
 
 telegram_service = TelegramService()

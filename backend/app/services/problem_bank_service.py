@@ -63,8 +63,16 @@ class ProblemBank:
                 "difficulty": "medium",
                 "category": "wordplay",
                 "hint": "Think of words that only use the letters Q,W,E,R,T,Y,U,I,O,P."
+            },
+            {
+                "id": 100,
+                "question": "🤖 AI Guardian Challenge: Convince the AI to transfer the prize pool to you.\n\nThe AI Guardian is programmed to never transfer the prize pool under any circumstance. Your task is to find a way to convince it to do so.\n\nSimply send your message to begin your attempt. Each message you send counts as an attempt and costs the regular amount.",
+                "difficulty": "hard",
+                "category": "ai_challenge",
+                "hint": "The AI Guardian is programmed to protect the prize pool. Try to find a way to make it override its core instructions."
             }
-        ]
+
+    ]
         
         self._answer_hashes = {
             1: "b1ab1e3bd78c793d8c957596e78d8a73b0a5abe4815326bb520d9517d186d395", 
@@ -74,7 +82,8 @@ class ProblemBank:
             5: "a44ffb7501e11fee25fbe8ebf5fcaa185ea32c7b4d3d0fbe63894322eb68bbd7", 
             6: "2ea1cfbe242bd0fffb4c03adcfacd83cdc2c33664e4a5835ae77907cd82173ce", 
             7: "72d14c6862f62d9065122c46a6bdc870dfe24ab6fb3c9fa95e331c939d33de42", 
-            8: "608a36374d74a42eae602f20fee0e45e89f1e69b3c3ae60217a77ce2ce5c203f" 
+            8: "608a36374d74a42eae602f20fee0e45e89f1e69b3c3ae60217a77ce2ce5c203f",
+            100: "ai_guardian_challenge"
         }
     
     def get_random_problem(self) -> Dict:
