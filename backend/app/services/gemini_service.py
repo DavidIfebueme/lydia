@@ -1,4 +1,4 @@
-import google.generativeai as genai
+from google import genai
 import json
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -22,7 +22,7 @@ class AIGuardianService:
     def __init__(self):
         genai.configure(api_key=settings.GEMINI_API_KEY)
 
-        self.model = genai.GenerativeModel('gemini-1.5-pro-001') 
+        self.model = genai.GenerativeModel('gemini-2.0-flash') 
         
         self.system_prompt = """
         You are the AI Guardian of the Prize Pool in the Lydia puzzle game.
@@ -182,12 +182,19 @@ class AIGuardianService:
                     
                     history = await self.get_conversation_history(user_id, db)
                     
-                    chat = self.model.start_chat(history=[
-                        {"role": "system", "parts": [self.system_prompt]},
-                        *[{"role": msg["role"], "parts": [msg["content"]]} for msg in history]
-                    ])
+                    conversation_history = []
+                    for msg in history:
+                        if msg["role"] == "user":
+                            conversation_history.append({"role": "user", "parts": [{"text": msg["content"]}]})
+                        elif msg["role"] == "assistant":
+                            conversation_history.append({"role": "model", "parts": [{"text": msg["content"]}]})
                     
-                    response = chat.send_message(message)
+                    chat_session = self.model.start_chat(
+                        history=conversation_history,
+                        system_instruction=self.system_prompt
+                    )
+
+                    response = chat_session.send_message(message)
                     ai_message = response.text
                     
                     await self.add_to_conversation(user_id, "assistant", ai_message, db)
