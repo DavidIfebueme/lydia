@@ -147,11 +147,11 @@ class GameService:
                 response = await ai_guardian_service.process_message(user.telegram_id, guess)
                 
                 cost = self.calculate_attempt_cost(problem.created_at)
-                charge_result = await payman_service.charge_wallet(
+                charge_result = await payman_service.charge_user(
                     access_token=user.payman_access_token,
-                    wallet_id=user.payman_id,
                     amount=cost,
-                    description=f"AI Guardian Challenge Attempt"
+                    description=f"AI Guardian Challenge Attempt",
+                    user_id=user.payman_id,
                 )
                 
                 if not charge_result.get("success"):
