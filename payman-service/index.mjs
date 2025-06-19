@@ -398,7 +398,8 @@ app.get("/token-status", async (req, res) => {
       expiresAt: tokenManager.tokenData.expiresAt,
       expiresIn: `${minutesRemaining} minutes`,
       refreshedAt: tokenManager.tokenData.refreshedAt,
-      needsRefresh: tokenManager.shouldRefreshToken()
+      needsRefresh: tokenManager.shouldRefreshToken(),
+      accessToken: tokenManager.tokenData.accessToken
     });
   } catch (error) {
     res.status(500).json({
@@ -415,7 +416,8 @@ app.post("/refresh-token", async (req, res) => {
     res.json({
       success: true,
       message: "Token refreshed successfully",
-      expiresAt: tokenManager.tokenData.expiresAt
+      expiresAt: tokenManager.tokenData.expiresAt,
+      accessToken: tokenManager.tokenData.accessToken
     });
   } catch (error) {
     res.status(500).json({
@@ -424,7 +426,7 @@ app.post("/refresh-token", async (req, res) => {
       details: error.message
     });
   }
-})
+});
 
 app.listen(PORT, async () => {
   console.log(`🚀 Payman service running on port ${PORT}`);

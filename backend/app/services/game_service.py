@@ -1,5 +1,6 @@
 import hashlib
 import math
+import httpx
 from datetime import datetime, timezone
 from decimal import Decimal
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -95,7 +96,7 @@ class GameService:
             )
             db.add(new_problem)
             
-            initial_amount = settings.INITIAL_PRIZE_POOL_AMOUNT
+            initial_amount = rollover_amount if rollover_amount is not None else self.BASE_PRIZE_POOL
             
             pool = PrizePool(
                 problem_id=new_problem.id,
@@ -221,58 +222,123 @@ class GameService:
     
     async def handle_winner(self, user: User, problem: Problem, attempt: Attempt, db: AsyncSession) -> dict:
         """Handle winner: payout 80%, rollover 20%, start new game"""
-        current_pool = await self.get_current_prize_pool(problem.id, db)
-        
-        current_pool_decimal = Decimal(str(current_pool))
-        winner_ratio_decimal = Decimal(str(self.WINNER_RATIO))
-        rollover_ratio_decimal = Decimal(str(self.ROLLOVER_RATIO))
+        try:
+            current_pool = await self.get_current_prize_pool(problem.id, db)
+            
+            current_pool_decimal = Decimal(str(current_pool))
+            winner_ratio_decimal = Decimal(str(self.WINNER_RATIO))
+            rollover_ratio_decimal = Decimal(str(self.ROLLOVER_RATIO))
 
-        winner_payout = round(current_pool_decimal * winner_ratio_decimal, 2)
-        rollover_amount = round(current_pool_decimal * rollover_ratio_decimal, 2)
-        
-        winner_payout_float = float(winner_payout)
-        rollover_amount_float = float(rollover_amount)
+            winner_payout = round(current_pool_decimal * winner_ratio_decimal, 2)
+            rollover_amount = round(current_pool_decimal * rollover_ratio_decimal, 2)
+            
+            winner_payout_float = float(winner_payout)
+            rollover_amount_float = float(rollover_amount)
 
-        if not user.payman_id:
-            return {"error": "Your wallet is connected but missing a Payman ID. Please reconnect with /start"}
-        
-        payout_result = await payman_service.payout_winner(
-            access_token=user.payman_access_token,
-            amount=winner_payout_float,
-            payee_id=user.payman_payee_id,
-            description=f"🏆 Prize Pool Winner - Problem #{problem.id}"
-        )
-        
-        problem.is_active = False
-        problem.ended_at = datetime.utcnow()
-        
-        result = await db.execute(
-            select(PrizePool).where(PrizePool.problem_id == problem.id)
-        )
-        prize_pool = result.scalar_one_or_none()
-        
-        if prize_pool:
-            prize_pool.winner_user_id = user.id
-            prize_pool.paid_out = True
-        
-        new_problem = await self.create_new_problem(db, rollover_amount_float)
-        
-        await db.commit()
-        
-        return {
-            "success": True,
-            "is_correct": True,
-            "is_winner": True,
-            "cost": float(attempt.amount_charged),
-            "total_pool": float(current_pool),
-            "winner_payout": float(winner_payout),
-            "rollover_amount": float(rollover_amount),
-            "payout_result": payout_result,
-            "attempt_id": attempt.id,
-            "new_problem": {
-                "id": new_problem.id,
-                "question": new_problem.question
+            if not user.payman_payee_id:
+                print(f"⚠️ User {user.id} has no payee ID, marking prize pool but not paying out")
+                
+                problem.is_active = False
+                problem.ended_at = datetime.now(timezone.utc)
+                
+                result = await db.execute(
+                    select(PrizePool).where(PrizePool.problem_id == problem.id)
+                )
+                prize_pool = result.scalar_one_or_none()
+                
+                if prize_pool:
+                    prize_pool.winner_user_id = user.id
+                
+                new_problem = await self.create_new_problem(db, rollover_amount_float)
+                await db.commit()
+                
+                return {
+                    "success": True,
+                    "is_correct": True,
+                    "is_winner": True,
+                    "payout_failed": True,
+                    "reason": "Missing payee ID",
+                    "cost": float(attempt.amount_charged),
+                    "total_pool": float(current_pool),
+                    "winner_payout": float(winner_payout),
+                    "rollover_amount": float(rollover_amount),
+                    "attempt_id": attempt.id,
+                    "new_problem": new_problem_result.get("problem")
+                }
+            
+            app_token = None
+            try:
+                print("🔄 Getting app token from token management service")
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.get(f"{settings.PAYMAN_SERVICE_URL}/token-status")
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        if data.get("tokenAvailable"):
+                            app_token = data.get("accessToken")
+                            print("✅ Retrieved app token from token management service")
+                        else:
+                            print("⚠️ Token unavailable, requesting refresh")
+                            refresh_response = await client.post(f"{settings.PAYMAN_SERVICE_URL}/refresh-token")
+                            if refresh_response.status_code == 200:
+                                refresh_data = refresh_response.json()
+                                app_token = refresh_data.get("accessToken")
+                                print("✅ Token refreshed successfully")
+                    
+                    if not app_token:
+                        print("⚠️ Could not get app token, falling back to user token")
+            except Exception as e:
+                print(f"⚠️ Error getting app token: {str(e)}")
+            
+            payout_result = await payman_service.payout_winner(
+                access_token=app_token if app_token else user.payman_access_token,
+                amount=winner_payout_float,
+                payee_id=user.payman_payee_id,
+                description=f"🏆 Prize Pool Winner - Problem #{problem.id}"
+            )
+            
+            problem.is_active = False
+            problem.ended_at = datetime.now(timezone.utc)
+            
+            result = await db.execute(
+                select(PrizePool).where(PrizePool.problem_id == problem.id)
+            )
+            prize_pool = result.scalar_one_or_none()
+            
+            if prize_pool:
+                prize_pool.winner_user_id = user.id
+                prize_pool.paid_out = payout_result.get("success", False)
+            
+            new_problem_result = await self.create_new_problem(db, rollover_amount_float)
+            
+            if not new_problem_result.get("success"):
+                print(f"⚠️ Failed to create new problem: {new_problem_result.get('error')}")
+                return {
+                    "error": "Failed to create new problem after winner",
+                    "is_correct": True,
+                    "is_winner": True
+                }
+            
+            await db.commit()
+            
+            return {
+                "success": True,
+                "is_correct": True,
+                "is_winner": True,
+                "cost": float(attempt.amount_charged),
+                "total_pool": float(current_pool),
+                "winner_payout": float(winner_payout),
+                "rollover_amount": float(rollover_amount),
+                "payout_result": payout_result,
+                "attempt_id": attempt.id,
+                "new_problem": new_problem_result.get("problem")
             }
-        }
+        except Exception as e:
+            print(f"Error handling winner: {str(e)}")
+            await db.rollback()
+            return {
+                "error": f"Failed to process winner: {str(e)}",
+                "is_correct": True
+            }
 
 game_service = GameService()
