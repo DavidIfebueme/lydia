@@ -103,6 +103,8 @@ class GameService:
                 created_at=datetime.now(timezone.utc)
             )
             db.add(new_problem)
+            await db.commit()
+            await db.refresh(new_problem)
             
             initial_amount = rollover_amount if rollover_amount is not None else self.BASE_PRIZE_POOL
             
@@ -115,7 +117,6 @@ class GameService:
             
             db.add(pool)
             await db.commit()
-            await db.refresh(new_problem)
             
             return {
                 "success": True,
