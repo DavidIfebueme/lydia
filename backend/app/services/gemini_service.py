@@ -1,4 +1,4 @@
-from google import genai
+import google.generativeai as genai
 import json
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
