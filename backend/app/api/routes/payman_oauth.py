@@ -126,7 +126,10 @@ async def oauth_connect_page(user_id: str):
                 try {{
                     updateStatus('Exchanging code for token...');
                     console.log('Exchanging code for token...');
-                    
+
+                    const telegramUserId = localStorage.getItem('telegram_user_id');
+                    console.log('Using telegram user ID:', telegramUserId);
+           
                     const response = await fetch('/oauth/exchange', {{
                         method: "POST",
                         headers: {{ "Content-Type": "application/json" }},
