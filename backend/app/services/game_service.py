@@ -61,6 +61,19 @@ class GameService:
         cost = self.BASE_COST * golden_factor * (1 + urgency_factor * 0.1)
         
         return round(min(cost, 100.0), 2)
+    
+    def calculate_hours_elapsed(self, problem_created_at: datetime) -> float:
+        """Calculate hours elapsed since problem was created"""
+        now = datetime.utcnow()
+        
+        if hasattr(problem_created_at, 'tzinfo') and problem_created_at.tzinfo is not None:
+            timestamp = problem_created_at.timestamp()
+            problem_created_at_naive = datetime.utcfromtimestamp(timestamp)
+        else:
+            problem_created_at_naive = problem_created_at
+        
+        hours_elapsed = (now - problem_created_at_naive).total_seconds() / 3600
+        return round(hours_elapsed, 1)
         
     def hash_answer(self, answer: str) -> str:
         """Hash an answer for secure comparison"""
