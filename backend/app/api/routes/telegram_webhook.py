@@ -50,6 +50,8 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             await handle_balance_command(chat_id, user, db)
         elif text.startswith("/menu") or text.startswith("/commands"):
             await handle_menu_command(chat_id)
+        elif text.startswith("/debug"):
+             await handle_debug_command(chat_id, user_id, db)    
         else:
             await handle_guess_attempt(chat_id, user, text, db)
         
@@ -560,3 +562,32 @@ This happens periodically for security reasons. After reconnecting, you'll be ab
     
     await telegram_service.send_message(chat_id, message)
     return {"token_expired": True}    
+
+async def handle_debug_command(chat_id: int, user_id: int, db: AsyncSession):
+    """Show debug information about the user"""
+    result = await db.execute(select(User).where(User.telegram_id == str(user_id)))
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        await telegram_service.send_message(chat_id, "⚠️ User not found in database")
+        return
+    
+    message = f"""
+🔍 <b>Debug Information</b>
+
+<b>User:</b>
+ID: {user.id}
+Telegram ID: {user.telegram_id}
+Payman ID: {user.payman_id or "Not set"}
+Payman Payee ID: {user.payman_payee_id or "Not set"}
+Token: {"✅ Set" if user.payman_access_token else "❌ Not set"}
+Token Expires: {user.token_expires_at or "Not set"}
+
+<b>Actions:</b>
+• Use /start to reconnect your wallet
+• Tap button below to view commands
+"""
+    
+    await telegram_service.send_message(chat_id, message)
+    await telegram_service.send_commands_menu(chat_id)
+

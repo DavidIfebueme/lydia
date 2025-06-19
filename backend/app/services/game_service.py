@@ -87,10 +87,18 @@ class GameService:
         """Create a new problem with rollover from previous"""
         try:
             problem_data = problem_bank.get_random_problem()
+            problem_id = problem_data["id"]            
+            print(f"🔍 Creating problem with ID #{problem_id}")
+            
+            answer_hash = problem_bank._answer_hashes.get(problem_id, "default_hash")
+            if answer_hash == "default_hash":
+                print(f"⚠️ No answer hash found for problem {problem_id}, using default")
+        
             
             new_problem = Problem(
                 id=problem_data["id"],
                 question=problem_data["question"],
+                answer_hash=answer_hash,
                 is_active=True,
                 created_at=datetime.now(timezone.utc)
             )
@@ -249,7 +257,7 @@ class GameService:
                 if prize_pool:
                     prize_pool.winner_user_id = user.id
                 
-                new_problem = await self.create_new_problem(db, rollover_amount_float)
+                new_problem_result = await self.create_new_problem(db, rollover_amount_float)
                 await db.commit()
                 
                 return {

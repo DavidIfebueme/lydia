@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi import APIRouter, Request, Depends, Query
 from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -130,7 +130,7 @@ async def oauth_connect_page(user_id: str):
                     const response = await fetch('/oauth/exchange', {{
                         method: "POST",
                         headers: {{ "Content-Type": "application/json" }},
-                        body: JSON.stringify({{ code }})
+                        body: JSON.stringify({{ code, telegram_user_id: telegramUserId }})
                     }});
                     
                     const result = await response.json();
@@ -254,7 +254,8 @@ async def notify_success(request: Request, db: AsyncSession = Depends(get_db)):
         payee_id = data.get("payee_id")
         
         print(f"🔄 Received OAuth success for Telegram user {telegram_user_id}")
-        
+        print(f"🔍 Payee ID received: {payee_id}")
+
         result = await db.execute(select(User).where(User.telegram_id == telegram_user_id))
         user = result.scalar_one_or_none()
         
@@ -263,8 +264,15 @@ async def notify_success(request: Request, db: AsyncSession = Depends(get_db)):
             return {"success": False, "error": "User not found"}
         
         user.payman_access_token = access_token
-        user.payman_payee_id = payee_id
 
+        if payee_id and not user.payman_payee_id:
+            user.payman_payee_id = payee_id
+            print(f"✅ Updated payee ID for user {user.id}: {payee_id}")
+        elif user.payman_payee_id:
+            print(f"ℹ️ User {user.id} already has payee ID: {user.payman_payee_id}")
+        elif not payee_id:
+            print(f"⚠️ No payee ID received for user {user.id}")
+        
         expires_in = data.get("expires_in", 600)
         user.token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
         await db.commit()
@@ -364,3 +372,18 @@ Try using the /balance command. If you see your wallet balance, the connection w
         import traceback
         traceback.print_exc()
         return {"success": False, "error": str(e)}
+
+@router.get("/check-payee")
+async def check_user_payee(telegram_id: str = Query(...), db: AsyncSession = Depends(get_db)):
+    """Check if a user already has a payee ID assigned"""
+    result = await db.execute(select(User).where(User.telegram_id == telegram_id))
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        return {"has_payee_id": False, "message": "User not found"}
+    
+    return {
+        "has_payee_id": bool(user.payman_payee_id),
+        "user_id": user.id,
+        "telegram_id": user.telegram_id
+    }        

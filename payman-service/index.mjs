@@ -60,10 +60,11 @@ app.get("/health", (req, res) => {
 
 app.post("/oauth/exchange", async (req, res) => {
   try {
-    const { code } = req.body;
+    const { code, telegram_user_id } = req.body;
 
     console.log("🔄 Received token exchange request");
     console.log("Code received:", code ? code.substring(0, 20) + "..." : "No code");
+    console.log("Telegram user ID:", telegram_user_id || "Not provided");
 
     if (!code) {
       console.error("No authorization code provided in request");
@@ -103,60 +104,107 @@ app.post("/oauth/exchange", async (req, res) => {
     console.log("✅ Token exchange successful");
     console.log("Access token length:", tokenResponse.accessToken?.length || 0);
 
-    const userId = tokenResponse.paymanUserId || tokenResponse.payman_user_id || "unknown";
-    const userSuffix = userId.slice(-4);
-    const payeeName = `U${userSuffix}`
-    console.log("🔄 Creating test payee with name:", payeeName);
+    let needsPayeeId = true;
+    if (telegram_user_id && process.env.BACKEND_URL) {
+      try {
+        console.log(`🔍 Checking if user ${telegram_user_id} already has a payee ID`);
+        const checkUrl = `${process.env.BACKEND_URL}/api/users/check-payee?telegram_id=${telegram_user_id}`;
+        console.log(`Making request to: ${checkUrl}`);
+        
+        const checkResponse = await fetch(checkUrl);
+        
+        if (checkResponse.ok) {
+          const userData = await checkResponse.json();
+          needsPayeeId = !userData.has_payee_id;
+          console.log(`🔍 User payee check result: ${needsPayeeId ? "needs new payee ID" : "already has payee ID"}`);
+        } else {
+          console.error("Failed to check user payee ID status:", await checkResponse.text());
+        }
+      } catch (err) {
+        console.error("Error checking existing payee ID:", err);
+      }
+    } else {
+      console.log("⚠️ Cannot check existing payee ID: Missing telegram_user_id or BACKEND_URL");
+    }
 
     let payeeId = null;
-    try {
-      const payeeResponse = await client.ask(`create a test payee for this account with name ${payeeName}`);
-      console.log("Payee created response:", payeeResponse);
+    if (needsPayeeId) {
+      console.log("🔄 User needs a payee ID - will attempt to create or find one");
       
-      if (payeeResponse?.artifacts) {
-        for (const artifact of payeeResponse.artifacts) {
-          if (artifact.name === 'response' && artifact.content) {
-            console.log("Found response artifact with content");
-            const content = artifact.content;
-            
-            const pdIndex = content.indexOf('pd-');
-            
-            if (pdIndex !== -1) {
-              const payeeIdStart = content.substring(pdIndex);
-              const idPattern = /pd-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/;
-              const match = payeeIdStart.match(idPattern);
+      try {
+        console.log("🔍 Checking existing payees...");
+        const listPayeesResponse = await client.ask("list all payees");
+        
+        if (listPayeesResponse?.artifacts) {
+          for (const artifact of listPayeesResponse.artifacts) {
+            if (artifact.name === 'response' && artifact.content) {
+              const idPattern = /pd-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/g;
+              const matches = artifact.content.match(idPattern);
               
-              if (match && match[0]) {
-                payeeId = match[0];
-                console.log("✅ Extracted Payee ID:", payeeId);
-              } else {
-                const simpleMatch = payeeIdStart.match(/^(pd-[a-f0-9-]+)/);
-                if (simpleMatch && simpleMatch[1]) {
-                  payeeId = simpleMatch[1];
-                  console.log("✅ Extracted Payee ID (simple method):", payeeId);
-                } else {
-                  console.log("Could not extract payee ID with standard patterns");
-                }
+              if (matches && matches.length > 0) {
+                payeeId = matches[0];
+                console.log("✅ Found existing payee ID:", payeeId);
+                break;
               }
-            } else {
-              console.log("No pd- pattern found in response content");
             }
           }
         }
-      }
-        } catch (err) {
-          console.error("Error creating payee:", err);
+        
+        if (!payeeId) {
+          const userId = tokenResponse.paymanUserId || tokenResponse.payman_user_id || "unknown";
+          const userSuffix = userId.slice(-4);
+          const payeeName = `U${userSuffix}`
+          console.log("🔄 Creating payee with name:", payeeName);
+          
+          const payeeResponse = await client.ask(`create a test payee for this account with name ${payeeName}`);
+          
+          if (payeeResponse?.artifacts) {
+            for (const artifact of payeeResponse.artifacts) {
+              if (artifact.name === 'response' && artifact.content) {
+                const content = artifact.content;
+                
+                const pdIndex = content.indexOf('pd-');
+                
+                if (pdIndex !== -1) {
+                  const payeeIdStart = content.substring(pdIndex);
+                  const idPattern = /pd-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/;
+                  const match = payeeIdStart.match(idPattern);
+                  
+                  if (match && match[0]) {
+                    payeeId = match[0];
+                    console.log("✅ Created new payee ID:", payeeId);
+                  } else {
+                    const simpleMatch = payeeIdStart.match(/^(pd-[a-f0-9-]+)/);
+                    if (simpleMatch && simpleMatch[1]) {
+                      payeeId = simpleMatch[1];
+                      console.log("✅ Extracted Payee ID (simple method):", payeeId);
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
+      } catch (err) {
+        console.error("Error handling payee:", err);
+      }
+    } else {
+      console.log("ℹ️ Skipping payee creation - user already has a payee ID");
+    }
 
-        const responseData = {
-          success: true,
-          accessToken: tokenResponse.accessToken,
-          expiresIn: tokenResponse.expiresIn,
-          userId: tokenResponse.paymanUserId || tokenResponse.payman_user_id || "unknown",
-          payeeId: payeeId
-        };
+    console.log("Final payee ID status:", payeeId ? `Found: ${payeeId}` : "Not found");
 
-        res.json(responseData);
+
+    const responseData = {
+      success: true,
+      accessToken: tokenResponse.accessToken,
+      expiresIn: tokenResponse.expiresIn,
+      userId: tokenResponse.paymanUserId || tokenResponse.payman_user_id || "unknown",
+      payeeId: payeeId,
+      telegram_user_id: telegram_user_id
+    };
+
+    res.json(responseData);
 
   } catch (error) {
     console.error("Token exchange failed:", error.message);
