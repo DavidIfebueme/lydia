@@ -238,7 +238,7 @@ app.post("/balance", async (req, res) => {
       expiresIn: 3600
     });
     
-    const command = "List all my wallets and their balances";
+    const command = "List all my live wallets and their balances";
     console.log(`🗣️ Executing command: ${command}`);
     
     const result = await client.ask(command);
